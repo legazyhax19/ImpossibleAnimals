@@ -108,8 +108,6 @@ local W = {
     stuck = false, lastTeleport = 0,
 }
 getgenv().WildAuto = W
-W.log = function(...) log(...) end
-W.chestTpl = getgenv().WildChestTpl -- ใช้คำสั่งที่จำไว้จากรอบก่อน
 
 function W.Stop()
     if not W.running then return end
@@ -190,21 +188,13 @@ getgenv().WildAutoOnCall = function(a1, a2)
     if a1 == "Attack" and type(a2.sequence) == "number" then
         A.seq = math.max(A.seq, a2.sequence)
     end
-
-    -- จำคำสั่งเก็บหีบจากการกดของเกมเอง (จะได้ส่งแบบเดียวกันกับหีบอื่น)
-    if a1 ~= "Attack" and a1 ~= "ClaimEgg" and a1 ~= "Create" and a1 ~= "Ready" then
-        local chestKey
-        for k, v in pairs(a2) do
-            if type(v) == "string" and v:match("^chest%d+$") then chestKey = k end
-        end
-        if chestKey or tostring(a1):lower():find("chest") then
-            local copy = {}
-            for k, v in pairs(a2) do copy[k] = v end
-            A.chestTpl = { action = a1, key = chestKey, args = copy }
-            getgenv().WildChestTpl = A.chestTpl
-            if A.log then A.log("จำคำสั่งเก็บหีบได้แล้ว (" .. tostring(a1) .. ")") end
-        end
-    end
+end
+-- เข้า Wild เองด้วยมือ (กด Ready ในเกม) ก็นับด้วย
+local prevOnCall = getgenv().WildAutoOnCall
+getgenv().WildAutoOnCall = function(a1, a2)
+    local A = getgenv().WildAuto
+    if A and a1 == "Ready" then A.readySent = true end
+    return prevOnCall(a1, a2)
 end
 
 local hookOk = pcall(function()
@@ -246,10 +236,26 @@ local function markDead(id)
     W.Units[id] = nil
 end
 
+-- หน้าเลือกตัวละครเปิดอยู่ = ยังไม่ได้อยู่ในโซน
+local function pickerOpen()
+    local ok, vis = pcall(function()
+        local root = player.PlayerGui.ImpossibleAnimals.Root
+        local wp = root:FindFirstChild("WildPicker")
+        if not wp then return false end
+        local popup = wp:FindFirstChild("Popup")
+        local v = wp.Visible
+        if popup and popup:IsA("GuiObject") then v = v and popup.Visible end
+        return v
+    end)
+    return ok and vis == true
+end
+
 local function leaveZone(reason)
     if not W.InWild then return end
     W.InWild = false
+    W.readySent = false
     W.leftAt = os.clock()
+    resetZone() -- ล้างเป้าหมายเก่าทิ้ง กันวาร์ปไปหาของค้าง
     log(reason)
 end
 
@@ -258,7 +264,9 @@ table.insert(W.conns, Changed.OnClientEvent:Connect(function(data)
 
     if data.reset then resetZone() end
     -- ข้อมูลเริ่มรอบ (reset/eggs) = เข้าโซนแล้ว · ข้อมูลสัตว์อย่างเดียวนับเฉพาะเมื่อออกมานานแล้ว (กันข้อมูลค้างหลังตาย)
-    if not W.InWild and (data.reset or data.eggs or (data.units and os.clock() - W.leftAt > 10)) then
+    -- นับว่าอยู่ในโซนเฉพาะหลังกดเลือกตัว (Ready) แล้ว และหน้าเลือกตัวปิดแล้ว
+    if not W.InWild and not W.entering and not pickerOpen()
+        and ((W.readySent and (data.reset or data.eggs or data.units)) or data.reset) then
         W.InWild = true
     end
     if not W.runId and (W.scanCount or 0) < 10 then
@@ -351,11 +359,14 @@ task.spawn(function()
         local root = getRoot()
         if root then
             local pos = root.Position
-            if lastPos and W.InWild and (pos - lastPos).Magnitude > 300
-                and os.clock() - W.lastTeleport > 1 then
+            -- ถูกย้ายไกลทันที (เทียบกับจุดที่เราวาร์ปเองด้วย)
+            local ref = lastPos
+            if W.expectedPos and os.clock() - W.lastTeleport < 1 then ref = W.expectedPos end
+            if ref and W.InWild and (pos - ref).Magnitude > 300 then
                 leaveZone("ออกจากโซน")
             end
             lastPos = pos
+            if W.InWild and pickerOpen() then leaveZone("ออกจากโซน") end
             if root.AssemblyLinearVelocity.Magnitude < 1.5 then
                 stillSince = stillSince or os.clock()
             else
@@ -423,7 +434,8 @@ local function approach(pos, range)
         local stand = to + back * math.max(range - 3, 2)
         local y = root.Position.Y
         W.lastTeleport = os.clock()
-        root.CFrame = CFrame.new(Vector3.new(stand.X, y, stand.Z), Vector3.new(to.X, y, to.Z))
+        W.expectedPos = Vector3.new(stand.X, y, stand.Z)
+        root.CFrame = CFrame.new(W.expectedPos, Vector3.new(to.X, y, to.Z))
     elseif hum then
         hum:MoveTo(Vector3.new(pos.X, root.Position.Y, pos.Z))
     end
@@ -545,11 +557,15 @@ local function enterWild()
     end)
     if not ok2 then log("Ready error:", res2) return done(false) end
     scanUUIDs(res2, "Ready")
+    W.readySent = true
 
+    -- รอหน้าเลือกตัวปิด แล้วนับว่าเข้าโซน
     for _ = 1, 40 do
-        if W.InWild then break end
+        if not pickerOpen() then break end
         task.wait(0.25)
     end
+    task.wait(0.5)
+    if not pickerOpen() then W.InWild = true end
     return done(W.InWild)
 end
 
@@ -660,47 +676,6 @@ local function resetCharacter()
 end
 
 ---------------------------------------------------------------------
--- หีบ
----------------------------------------------------------------------
-local function chestWanted(c)
-    if W.ChestDone[c.id] then return false end
-    local kind = tostring(c.kind)
-    if kind == "cash" and not CFG.CHEST_CASH then return false end
-    if kind ~= "cash" and not CFG.CHEST_FUSION then return false end
-    if (tonumber(c.tier) or math.huge) > CFG.MAX_ZONE then return false end
-    -- หีบเปิดได้เมื่อสัตว์ที่ผูกไว้ตายแล้ว
-    return c.enemyId == nil or W.Dead[c.enemyId] == true
-end
-
--- หาตำแหน่งหีบ: จากข้อมูลเกม หรือจากโมเดลในฉาก
-local function chestPos(c)
-    local p = toVec(c.position) or toVec(c.frame)
-    if p then return p end
-    local ial = workspace:FindFirstChild("ImpossibleAnimalsLocal")
-    local vis = ial and ial:FindFirstChild("WildVisuals")
-    if not vis then return nil end
-    for _, m in ipairs(vis:GetDescendants()) do
-        if (m:IsA("Model") or m:IsA("BasePart")) and m.Name:lower():find("chest")
-            and (m:GetAttribute("ChestId") == c.id or m:GetAttribute("EnemyId") == c.enemyId) then
-            local ok, piv = pcall(function() return m:GetPivot().Position end)
-            if ok then return piv end
-        end
-    end
-end
-
-local function claimChest(c)
-    local tpl = W.chestTpl
-    if not tpl then return false end
-    local args = {}
-    for k, v in pairs(tpl.args) do args[k] = v end
-    if tpl.key then args[tpl.key] = c.id end
-    if args.id ~= nil and W.runId then args.id = W.runId end
-    local ok, res = pcall(function() return Request:InvokeServer(tpl.action, args) end)
-    if not ok then log("เก็บหีบ error:", res) end
-    return ok
-end
-
----------------------------------------------------------------------
 -- ลูป
 ---------------------------------------------------------------------
 -- Auto Wild
@@ -717,15 +692,36 @@ end)
 -- Auto Attack
 task.spawn(function()
     while W.running do
-        if W.InWild then
+        if W.InWild and not W.entering then
             local target = getTarget()
             W.curTarget = target
             W.curEgg = plannedEgg()
 
-            if CFG.AUTO_ATTACK and target and not W.claimGoal and not W.chestGoal then
+            if CFG.AUTO_ATTACK and target and not W.claimGoal then
                 local u = W.Units[target]
                 local d = u and distTo(u.position) or math.huge
-                if d <= CFG.ATTACK_RANGE or (W.stuck and d <= CFG.STUCK_RANGE) then
+                local now = os.clock()
+
+                -- กันล็อคเป้าค้าง: เปลี่ยนเป้า → เริ่มนับใหม่
+                if target ~= W.wdTarget then
+                    W.wdTarget, W.wdHp, W.wdTime, W.wdSince = target, u and u.health, now, now
+                end
+                if u and u.health ~= W.wdHp then
+                    W.wdHp, W.wdTime = u.health, now
+                    W.skips = 0
+                end
+                local hitStuck = W.runId and not W.runIdGuess and now - W.wdTime > 8
+                local walkStuck = now - W.wdSince > 25 and W.wdHp == (u and u.health)
+                if hitStuck or walkStuck then
+                    W.Dead[target] = true
+                    W.wdTarget = nil
+                    W.skips = (W.skips or 0) + 1
+                    log("ข้าม " .. target .. " (ตีไม่ลด)")
+                    if W.skips >= 3 then
+                        W.skips = 0
+                        leaveZone("ตีไม่เข้าหลายตัวติดกัน — ถือว่าออกจากโซน")
+                    end
+                elseif d <= CFG.ATTACK_RANGE or (W.stuck and d <= CFG.STUCK_RANGE) then
                     if ensureRunId(target) then
                         attack(target, u.position)
                         if W.runIdGuess then
@@ -753,13 +749,11 @@ task.spawn(function()
     end
 end)
 
--- เดิน (เปิดตลอด) : หีบ → ไข่ → สัตว์
+-- เดิน (เปิดตลอด) : ไข่ → สัตว์
 task.spawn(function()
     while W.running do
-        if W.InWild then
-            if W.chestGoal then
-                approach(W.chestGoal, 4)
-            elseif W.claimGoal then
+        if W.InWild and not W.entering then
+            if W.claimGoal then
                 approach(W.claimGoal, 5)
             elseif CFG.AUTO_ATTACK and W.curTarget and W.Units[W.curTarget] then
                 approach(W.Units[W.curTarget].position, CFG.ATTACK_RANGE)
@@ -769,65 +763,10 @@ task.spawn(function()
     end
 end)
 
--- เก็บหีบระหว่างทาง
-task.spawn(function()
-    local warnedNoTpl, warnedNoPos = false, {}
-    while W.running do
-        local picked
-        if W.InWild and (CFG.CHEST_CASH or CFG.CHEST_FUSION) then
-            local bestD
-            for _, c in pairs(W.Chests) do
-                if chestWanted(c) then
-                    local p = chestPos(c)
-                    if p then
-                        local d = distTo(p)
-                        if not bestD or d < bestD then picked, bestD = { c = c, p = p }, d end
-                    elseif W.chestTpl then
-                        picked = { c = c } -- ไม่รู้ตำแหน่ง แต่ส่งคำสั่งเก็บได้เลย
-                        break
-                    elseif not warnedNoPos[c.id] then
-                        warnedNoPos[c.id] = true
-                    end
-                end
-            end
-        end
-
-        if picked then
-            local c = picked.c
-            W.chestGoal = picked.p
-            local started = os.clock()
-            -- เดินไปถึงหีบ (ถ้ารู้ตำแหน่ง) สูงสุด 15 วิ
-            while W.running and W.InWild and picked.p and distTo(picked.p) > 5 and os.clock() - started < 15 do
-                task.wait(0.2)
-            end
-            if W.InWild then
-                if W.chestTpl then
-                    claimChest(c)
-                elseif not warnedNoTpl then
-                    warnedNoTpl = true
-                    log("ยังไม่รู้คำสั่งเก็บหีบ — กดเก็บหีบเองหนึ่งครั้ง สคริปต์จะจำแล้วเก็บต่อเอง")
-                end
-                task.wait(0.6)
-                W.ChestDone[c.id] = true
-                local amt = tonumber(c.amount)
-                if tostring(c.kind) == "cash" then
-                    log("เก็บเงิน " .. (amt and tostring(amt) or "?"))
-                else
-                    log("เก็บ " .. tostring(c.kind) .. " x" .. tostring(c.amount or 1))
-                end
-            end
-            W.chestGoal = nil
-        else
-            W.chestGoal = nil
-            task.wait(0.4)
-        end
-    end
-end)
-
 -- Auto Claim: เคลียร์โซนเสร็จ (และเก็บหีบหมด) → ไปเก็บไข่ใบดีสุดที่ผ่านเงื่อนไข
 task.spawn(function()
     while W.running do
-        if CFG.AUTO_CLAIM and W.InWild and next(W.Eggs) and not getTarget() and not W.chestGoal then
+        if CFG.AUTO_CLAIM and W.InWild and not W.entering and next(W.Eggs) and not getTarget() then
             -- ไข่ที่สัตว์ตายแล้ว (= ดรอปแล้ว) และผ่านเงื่อนไข
             local best
             for _, e in pairs(W.Eggs) do
@@ -969,42 +908,12 @@ local function renderEggs()
 end
 pEggs.OnShow = renderEggs
 
--- ===== Chests =====
+-- ===== Chests (ยังไม่ทำงาน — รอหาข้อมูลคำสั่งเก็บหีบ) =====
 local sChest = pChests:AddSection("เก็บหีบระหว่างทาง")
-sChest:AddToggle({ Title = "Cash", Description = "เก็บหีบเงินหลังฆ่าสัตว์ที่ผูกไว้",
+sChest:AddToggle({ Title = "Cash", Description = "เก็บหีบเงิน (ยังไม่ทำงาน)",
     Default = CFG.CHEST_CASH, Callback = bind("CHEST_CASH") })
-sChest:AddToggle({ Title = "Fusion token", Description = "เก็บหีบหินฟิวชัน",
+sChest:AddToggle({ Title = "Fusion token", Description = "เก็บหีบหินฟิวชัน (ยังไม่ทำงาน)",
     Default = CFG.CHEST_FUSION, Callback = bind("CHEST_FUSION") })
-local tplLabel = sChest:AddLabel({ Title = "คำสั่งเก็บหีบ", Description = "ถ้ายังไม่รู้ ให้กดเก็บหีบเองหนึ่งครั้ง",
-    Value = "" })
-
-local chestListUI = pChests:AddList({ Header = "Chests in zone", RowHeight = 26, Clickable = false })
-
-local function renderChests()
-    tplLabel:Set(W.chestTpl and ('<font color="#23d18b">' .. esc(tostring(W.chestTpl.action)) .. '</font>')
-        or '<font color="#f14c4c">ยังไม่รู้</font>')
-    local list = {}
-    for _, c in pairs(W.Chests) do table.insert(list, c) end
-    table.sort(list, function(a, b) return (tonumber(a.tier) or 0) < (tonumber(b.tier) or 0) end)
-    local items = {}
-    if #list == 0 then
-        table.insert(items, { Text = '<font color="#5f5f5f">ยังไม่มีข้อมูลหีบ — เข้าโซน Wild ก่อน</font>' })
-    end
-    for _, c in ipairs(list) do
-        local tag
-        if W.ChestDone[c.id] then tag = '<font color="#23d18b">เก็บแล้ว</font>'
-        elseif (tonumber(c.tier) or math.huge) > CFG.MAX_ZONE then tag = '<font color="#5f5f5f">เกินโซน</font>'
-        elseif c.enemyId and not W.Dead[c.enemyId] then tag = '<font color="#969696">รอฆ่า ' .. esc(c.enemyId) .. '</font>'
-        else tag = '<font color="#e5c07b">เก็บได้</font>' end
-        local isCash = tostring(c.kind) == "cash"
-        table.insert(items, { Text = string.format(
-            '<font color="#969696">Zone %s</font> <font color="%s">%s</font> <font color="#e6e6e6">%s</font>   %s',
-            esc(pad(c.tier, 3)), isCash and "#23d18b" or "#d670d6",
-            esc(pad(isCash and "cash" or "fusion", 8)), esc(pad("x" .. tostring(c.amount or 1), 12)), tag) })
-    end
-    chestListUI:SetItems(items)
-end
-pChests.OnShow = renderChests
 
 -- ===== สถานะมุมขวาบน + รีเฟรชรายการ =====
 task.spawn(function()
@@ -1017,7 +926,7 @@ task.spawn(function()
         tick += 1
         if tick % 2 == 0 then
             if Window.Current == pEggs then pcall(renderEggs)
-            elseif Window.Current == pChests then pcall(renderChests) end
+            end
         end
         task.wait(0.5)
     end
