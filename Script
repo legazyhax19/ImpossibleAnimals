@@ -11,6 +11,7 @@ local HttpService = game:GetService("HttpService")
 local Folder = ReplicatedStorage:WaitForChild("ImpossibleAnimals")
 local Request = Folder:WaitForChild("WildRequest")
 local Changed = Folder:WaitForChild("WildChanged")
+local GameRequest = Folder:WaitForChild("Request") -- remote ทั่วไปของเกม (ใช้กับฟิวชัน)
 local player = Players.LocalPlayer
 
 ---------------------------------------------------------------------
@@ -32,13 +33,14 @@ local pMain   = Window:AddPage("Main")
 local pCombat = Window:AddPage("Combat")
 local pEggs   = Window:AddPage("Eggs")
 local pChests = Window:AddPage("Chests")
+local pFusion = Window:AddPage("Fusion")
 local pLogs   = Window:AddPage("Logs")
 local Log = pLogs:AddLog({ Header = "Logs", Height = 320 })
 
 local function autoColor(s)
     local l = s:lower()
     if l:find("error") or s:find("ตาย") or s:find("หลุด") or s:find("ไม่เจอ")
-        or s:find("ไม่ได้") or s:find("ไม่เข้า") or s:find("ไม่มี") or s:find("ยังไม่รู้") then
+        or s:find("ไม่ได้") or s:find("ไม่เข้า") or s:find("ไม่มี") or s:find("ยังไม่รู้") or s:find("ไม่สำเร็จ") or s:find("หยุด") then
         return Col.Red
     elseif s:find("ได้ไข่") or s:find("เก็บ") or s:find("จำคำสั่ง")
         or s:find("พร้อม") or s:find("เข้า Wild") then
@@ -91,6 +93,14 @@ local CFG = {
     -- หีบ (เก็บระหว่างทาง หลังฆ่าสัตว์ที่ผูกไว้)
     CHEST_CASH     = false,
     CHEST_FUSION   = false,
+
+    -- ฟิวชัน (ทำได้ตอนอยู่ฐาน)
+    AUTO_FUSE      = false,
+    FUSE_DAD       = "",          -- id พ่อ เช่น "cheeseburger"
+    FUSE_MOM       = "",          -- id แม่ เช่น "solar-eclipse"
+    FUSE_MIN_STARS = 15,          -- ได้ดาวถึงเท่านี้ → กด Save เก็บไว้
+    FUSE_MAX       = 10,          -- ฟิวชันกี่ครั้งแล้วหยุด (0 = จนกว่าจะทำไม่ได้)
+    FUSE_DELAY     = 0.5,
 }
 
 ---------------------------------------------------------------------
@@ -233,6 +243,30 @@ local hookOk = pcall(function()
     end)
 end)
 if not hookOk then log("executor ไม่รองรับ hookmetamethod — จับ id จากการกดของเกมไม่ได้") end
+
+-- ดักการฟิวชันของเกมเอง → จำพ่อ/แม่ที่ใช้ล่าสุด
+getgenv().WildFuseOnCall = function(a1, a2)
+    local A = getgenv().WildAuto
+    if A and a1 == "Fuse" and type(a2) == "table" and a2.dad and a2.mom then
+        A.fuseCaptured = { dad = tostring(a2.dad), mom = tostring(a2.mom) }
+    end
+end
+pcall(function()
+    if getgenv().WildFuseHookV1 then return end
+    getgenv().WildFuseHookV1 = true
+    local GR = GameRequest
+    local old
+    old = hookmetamethod(game, "__namecall", function(self, ...)
+        if self == GR and not checkcaller() and getnamecallmethod() == "InvokeServer" then
+            local f = getgenv().WildFuseOnCall
+            if f then
+                local a1, a2 = ...
+                task.spawn(pcall, f, a1, a2)
+            end
+        end
+        return old(self, ...)
+    end)
+end)
 
 ---------------------------------------------------------------------
 -- ข้อมูลจากเกม
@@ -993,6 +1027,147 @@ sChest:AddToggle({ Title = "Cash", Description = "เก็บหีบเงิ
     Default = CFG.CHEST_CASH, Callback = bind("CHEST_CASH") })
 sChest:AddToggle({ Title = "Fusion token", Description = "เก็บหีบหินฟิวชัน (ยังไม่ทำงาน)",
     Default = CFG.CHEST_FUSION, Callback = bind("CHEST_FUSION") })
+
+-- ===== Fusion =====
+local function shortNum(n)
+    n = tonumber(n) or 0
+    local units = { { 1e12, "T" }, { 1e9, "B" }, { 1e6, "M" }, { 1e3, "K" } }
+    for _, u in ipairs(units) do
+        if n >= u[1] then return string.format("%.2f%s", n / u[1], u[2]) end
+    end
+    return tostring(math.floor(n))
+end
+
+local fuseResults = {} -- ผลล่าสุด (ใหม่สุดอยู่บน)
+local fuseCount, fuseFails = 0, 0
+
+local function fuseOnce()
+    if CFG.FUSE_DAD == "" or CFG.FUSE_MOM == "" then
+        log("ฟิวชัน: ยังไม่ได้ใส่พ่อ/แม่")
+        return false, "nodata"
+    end
+    if not W.fuseModeOn then
+        local okM, resM = pcall(function() return GameRequest:InvokeServer("Mode", "fusion") end)
+        if not okM or (type(resM) == "table" and resM.ok == false) then
+            log("ฟิวชัน: เปิดโหมดไม่ได้", type(resM) == "table" and tostring(resM.reason or resM.error or "") or tostring(resM))
+            return false, "mode"
+        end
+        W.fuseModeOn = true
+    end
+
+    local ok, res = pcall(function()
+        return GameRequest:InvokeServer("Fuse", { dad = CFG.FUSE_DAD, mom = CFG.FUSE_MOM })
+    end)
+    if not ok or type(res) ~= "table" or res.ok == false or type(res.creature) ~= "table" then
+        local why = type(res) == "table" and tostring(res.reason or res.error or res.message or "") or tostring(res)
+        log("ฟิวชันไม่สำเร็จ " .. why)
+        W.fuseModeOn = false
+        return false, why
+    end
+
+    local c = res.creature
+    local stars = tonumber(c.stars or c.baseStars) or 0
+    local keep = stars >= CFG.FUSE_MIN_STARS
+    if keep then
+        local okS, resS = pcall(function() return GameRequest:InvokeServer("Save", c.id) end)
+        if not okS or (type(resS) == "table" and resS.ok == false) then
+            keep = false
+            log("ฟิวชัน: Save ไม่สำเร็จ")
+        end
+    end
+    fuseCount += 1
+    table.insert(fuseResults, 1, { name = c.name, stars = stars, income = c.income, saved = keep })
+    if #fuseResults > 15 then table.remove(fuseResults) end
+    log(string.format("ฟิวชัน: %s %d ดาว%s", tostring(c.name), stars, keep and " → เก็บแล้ว" or ""))
+    return true
+end
+
+local sFuse = pFusion:AddSection("Fusion (ทำตอนอยู่ฐาน)")
+local fuseToggle = sFuse:AddToggle({ Title = "Auto Fuse", Description = "ฟิวชันซ้ำ เก็บเฉพาะตัวที่ดาวถึงที่ตั้ง",
+    Default = CFG.AUTO_FUSE, Callback = function(v)
+        CFG.AUTO_FUSE = v
+        if v then fuseCount, fuseFails = 0, 0 else W.fuseModeOn = false end
+    end })
+local dadInput = sFuse:AddInput({ Title = "Dad", Description = "id พ่อ เช่น cheeseburger",
+    Default = CFG.FUSE_DAD, Placeholder = "cheeseburger", Callback = function(t) CFG.FUSE_DAD = t:gsub("%s", "") end })
+local momInput = sFuse:AddInput({ Title = "Mom", Description = "id แม่ เช่น solar-eclipse",
+    Default = CFG.FUSE_MOM, Placeholder = "solar-eclipse", Callback = function(t) CFG.FUSE_MOM = t:gsub("%s", "") end })
+local fuseStarOpts = {}
+for i = 1, 40 do fuseStarOpts[i] = i .. "+" end
+sFuse:AddDropdown({ Title = "Save if stars", Description = "ได้ดาวถึงเท่านี้ → Save เก็บไว้",
+    Options = fuseStarOpts, Default = CFG.FUSE_MIN_STARS .. "+",
+    Callback = function(v) CFG.FUSE_MIN_STARS = tonumber(v:match("%d+")) or CFG.FUSE_MIN_STARS end })
+sFuse:AddStepper({ Title = "Max fuses", Description = "ฟิวชันกี่ครั้งแล้วหยุด (off = จนกว่าจะทำไม่ได้)",
+    Default = CFG.FUSE_MAX > 0 and CFG.FUSE_MAX or nil, Step = 1, Min = 1, Max = 1000, Format = "%d",
+    AllowNil = true, NilText = "off", Callback = function(v) CFG.FUSE_MAX = v or 0 end })
+sFuse:AddStepper({ Title = "Delay", Description = "วินาทีระหว่างแต่ละครั้ง",
+    Default = CFG.FUSE_DELAY, Step = 0.1, Min = 0.1, Max = 5, Format = "%.1fs", Callback = bind("FUSE_DELAY") })
+sFuse:AddButton({ Title = "Fuse once", Description = "ฟิวชัน 1 ครั้ง (เก็บถ้าดาวถึง)", ButtonText = "Fuse",
+    Color = Col.Accent, Callback = function()
+        if W.InWild then log("ฟิวชันได้เฉพาะตอนอยู่ฐาน") return end
+        task.spawn(fuseOnce)
+    end })
+sFuse:AddButton({ Title = "ใช้พ่อ/แม่ล่าสุดจากเกม", Description = "กดฟิวชันเองในเกม 1 ครั้งก่อน แล้วกดปุ่มนี้",
+    ButtonText = "Use", Callback = function()
+        local cap = W.fuseCaptured
+        if not cap then log("ยังไม่เห็นการฟิวชันจากเกม — กดฟิวชันเองหนึ่งครั้งก่อน") return end
+        CFG.FUSE_DAD, CFG.FUSE_MOM = cap.dad, cap.mom
+        dadInput:Set(cap.dad)
+        momInput:Set(cap.mom)
+        log("ฟิวชัน: ใช้ " .. cap.dad .. " + " .. cap.mom)
+    end })
+
+local fuseListUI = pFusion:AddList({ Header = "ผลล่าสุด", RowHeight = 24, Clickable = false })
+local function renderFusion()
+    local items = {}
+    if #fuseResults == 0 then
+        table.insert(items, { Text = '<font color="#5f5f5f">ยังไม่มีผล</font>' })
+    end
+    for _, r in ipairs(fuseResults) do
+        table.insert(items, { Text = string.format(
+            '<font color="#e6e6e6">%s</font> <font color="#e5c07b">%s ดาว</font>  <font color="#969696">%s/s</font>   %s',
+            esc(pad(r.name or "?", 16)), esc(pad(r.stars, 3)), esc(pad(shortNum(r.income), 9)),
+            r.saved and '<font color="#23d18b">เก็บแล้ว</font>' or '<font color="#5f5f5f">ไม่เก็บ</font>') })
+    end
+    fuseListUI:SetItems(items)
+end
+pFusion.OnShow = renderFusion
+
+-- ลูป Auto Fuse
+task.spawn(function()
+    local warnedWild = false
+    while W.running do
+        if CFG.AUTO_FUSE then
+            if W.InWild or W.entering then
+                if not warnedWild then
+                    warnedWild = true
+                    log("ฟิวชันได้เฉพาะตอนอยู่ฐาน — รอออกจาก Wild")
+                end
+                task.wait(1)
+            else
+                warnedWild = false
+                local ok, why = fuseOnce()
+                if ok then
+                    fuseFails = 0
+                else
+                    fuseFails += 1
+                    if why == "nodata" or fuseFails >= 2 then
+                        log("หยุด Auto Fuse")
+                        fuseToggle:Set(false)
+                    end
+                end
+                if CFG.AUTO_FUSE and CFG.FUSE_MAX > 0 and fuseCount >= CFG.FUSE_MAX then
+                    log("ฟิวชันครบ " .. CFG.FUSE_MAX .. " ครั้งแล้ว")
+                    fuseToggle:Set(false)
+                end
+                if Window.Current == pFusion then pcall(renderFusion) end
+                task.wait(CFG.FUSE_DELAY)
+            end
+        else
+            task.wait(0.5)
+        end
+    end
+end)
 
 -- ===== สถานะมุมขวาบน + รีเฟรชรายการ =====
 task.spawn(function()
