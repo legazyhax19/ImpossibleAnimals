@@ -1,5 +1,5 @@
--- Wild Auto — ใช้ CursorUI library
--- รันไฟล์นี้ไฟล์เดียว (library โหลดจาก GitHub ให้เอง) → กด Run
+-- Wild Manual — ใช้ CursorUI library
+-- ทุกฟังก์ชันแยกกัน เปิด/ปิดเองได้ (เข้า Wild, เดิน, ตี, เก็บไข่ ...)
 -- ซ่อน/แสดงหน้าต่าง: RightControl
 
 local LIBRARY_URL = "https://raw.githubusercontent.com/legazyhax19/LibraryCursorUI/refs/heads/main/BETA"
@@ -14,7 +14,7 @@ local Changed = Folder:WaitForChild("WildChanged")
 local player = Players.LocalPlayer
 
 ---------------------------------------------------------------------
--- โหลด library
+-- โหลด library + สร้างหน้าต่าง
 ---------------------------------------------------------------------
 local okLib, Library = pcall(function()
     return loadstring(game:HttpGet(LIBRARY_URL))()
@@ -27,129 +27,111 @@ end
 local Col = Library.Colors
 local esc = Library.Escape
 
-local Window = Library:CreateWindow({ Title = "Wild Auto", ToggleKey = Enum.KeyCode.RightControl })
-
--- สร้างหน้าตามลำดับเมนู (หน้า Logs สร้างก่อนเพื่อให้ print ใช้ได้ทันที แต่เรียงไว้ท้ายสุด)
-local pControl = Window:AddPage("Control")
-local pCombat  = Window:AddPage("Combat")
-local pEggs    = Window:AddPage("Eggs")
-local pUnits   = Window:AddPage("Units")
-local pLogs    = Window:AddPage("Logs")
+local Window = Library:CreateWindow({ Title = "Wild", ToggleKey = Enum.KeyCode.RightControl })
+local pMain   = Window:AddPage("Main")
+local pCombat = Window:AddPage("Combat")
+local pEggs   = Window:AddPage("Eggs")
+local pUnits  = Window:AddPage("Units")
+local pLogs   = Window:AddPage("Logs")
 local Log = pLogs:AddLog({ Header = "Logs", Height = 320 })
 
--- สีอัตโนมัติตามข้อความ
 local function autoColor(s)
     local l = s:lower()
     if l:find("error") or s:find("ตาย") or s:find("หลุด") or s:find("ไม่เจอ")
         or s:find("ไม่ได้") or s:find("ไม่เข้า") or s:find("ไม่มี") then
         return Col.Red
     elseif s:find("เสร็จ") or s:find("ได้ id") or s:find("ถูกต้อง") or s:find("เก็บแล้ว")
-        or s:find("ฆ่า") or s:find("พร้อม") then
+        or s:find("ฆ่า") or s:find("พร้อม") or s:find("เข้าโซน") then
         return Col.Green
     elseif s:find("เป้าหมาย") or s:find("ไปตี") or s:find("เริ่ม") or s:find("เลือก") then
         return Col.Yellow
-    elseif s:match("^%s*[=%-]+") or s:find("ตีครั้งที่") or s:find("กำลังเดิน") then
+    elseif s:find("ตีครั้งที่") then
         return Col.Faint
     end
     return Col.Text
 end
 
--- ส่ง print ทั้งหมดในสคริปต์นี้ไปที่หน้า Logs (และ console)
 local rawprint = print
-local function print(...)
+local function log(...)
     local n = select("#", ...)
     local parts = {}
     for i = 1, n do parts[i] = tostring((select(i, ...))) end
     local s = table.concat(parts, " ")
-    rawprint(s)
-    s = s:gsub("^%[Auto%]%s*", "")
+    rawprint("[Wild] " .. s)
     Log:Print(s, autoColor(s))
 end
 
 ---------------------------------------------------------------------
--- ตั้งค่า
+-- ตั้งค่า (ทุกค่าแก้ได้จาก UI)
 ---------------------------------------------------------------------
 local CFG = {
-    AUTO_START     = true,   -- true = กด Wild + เลือกตัวให้เอง / false = เข้าโซนเองแล้วค่อยรัน
-    PICK           = 1,      -- เลือก Creature ลำดับที่เท่าไหร่ (1 = ตัวดีสุดตามเกม)
+    -- เข้า Wild
+    AUTO_ENTER     = false,  -- ไม่ได้อยู่ในโซน → เข้า Wild เอง (ตาย/เก็บไข่แล้วก็เข้าใหม่)
+    PICK           = 1,      -- ใช้ Creature ลำดับที่
+    ENTER_DELAY    = 5,      -- ออกจากโซนแล้วรอกี่วินาทีก่อนเข้าใหม่
 
-    AUTO_ATTACK    = true,   -- ตีสัตว์อัตโนมัติ
-    KILL_IN_ORDER  = true,   -- true = ตีไล่ e1, e2, ... จนถึงตัวที่ผูกกับไข่ / false = ไปตีตัวเป้าหมายเลย
-    ATTACK_DELAY   = 0.25,   -- วินาทีระหว่างการตีแต่ละครั้ง
-    ATTACK_RANGE   = 12,     -- ระยะที่ถือว่าใกล้พอ (studs)
-    STUCK_RANGE    = 40,     -- ถ้าเดินต่อไม่ได้แล้ว (ชนตัวสัตว์) แต่อยู่ในระยะนี้ → ตีเลย
-    DEBUG_ATTACK   = true,   -- พิมพ์ผลการตี + ระยะ (ไว้หาสาเหตุถ้าไม่โดน)
+    -- ตี
+    AUTO_ATTACK    = false,
+    TARGET_MODE    = "Egg",  -- Egg / Nearest / Lowest / Selected
+    KILL_IN_ORDER  = true,   -- (โหมด Egg) ตีไล่ e1, e2, ... จนถึงตัวที่ผูกกับไข่
+    ATTACK_DELAY   = 0.25,
+    ATTACK_RANGE   = 12,
+    STUCK_RANGE    = 40,
+    AUTO_GET_ID    = true,   -- ยังไม่รู้ id รอบ → คลิกจอให้เกมตีเองหนึ่งที
+    DEBUG_ATTACK   = false,
 
-    TELEPORT       = false,  -- true = วาร์ปไปหาเป้าหมาย / false = เดินไป (ช้ากว่าแต่ปลอดภัยกว่า)
+    -- เดิน
+    AUTO_MOVE      = false,  -- เดินไปหาเป้าหมาย (สัตว์ หรือไข่ที่จะเก็บ)
+    TELEPORT       = false,
 
-    AUTO_CLAIM     = true,   -- เก็บไข่เป้าหมายอัตโนมัติ
-    RETURN_AFTER   = true,   -- ค่า returning ตอนเก็บไข่ (เกมส่ง true)
-    MAX_EGG_TIER   = nil,    -- จำกัด tier ไข่สูงสุดที่จะไปเอา เช่น 8 (nil = ไม่จำกัด)
-    TARGET_EGG     = nil,    -- บังคับเลือกไข่ เช่น "egg4" (nil = เลือกดีสุดอัตโนมัติ)
+    -- ไข่
+    AUTO_CLAIM     = false,
+    CLAIM_MODE     = "Target", -- Target = เฉพาะไข่เป้าหมาย / Best = ใบดีสุดที่ดรอป / Any = ใบไหนก็ได้
+    RETURN_AFTER   = true,
+    MAX_EGG_TIER   = nil,
+    TARGET_EGG     = nil,    -- เลือกจากหน้า Eggs (nil = เลือกดีสุดเอง)
 
-    MAX_RUNTIME    = 600,    -- รอบเดียวเกินกี่วินาที → ถือว่าค้าง เริ่มใหม่
-
-    AUTO_RESTART   = true,   -- ตาย / หลุดออกจากโซน → เริ่มรอบใหม่เอง
-    MAX_RESTARTS   = 10,     -- เริ่มใหม่ได้สูงสุดกี่ครั้ง
-    LEARN_LIMIT    = true,   -- ตายที่สัตว์ตัวไหน รอบหน้าเลือกไข่ที่ต่ำกว่าตัวนั้น
+    -- อื่นๆ
+    TARGET_ENEMY   = nil,    -- เลือกจากหน้า Units (ใช้กับโหมด Selected)
+    LEARN_LIMIT    = true,   -- ตายที่สัตว์ตัวไหน → ไม่เลือกไข่ที่สูงกว่านั้น
 }
 
 ---------------------------------------------------------------------
--- กันรันซ้อน
+-- สถานะ
 ---------------------------------------------------------------------
-if getgenv().WildAuto then
-    pcall(getgenv().WildAuto.Stop)
-end
+if getgenv().WildAuto then pcall(getgenv().WildAuto.Stop) end
 
 local W = {
-    Units = {}, Dead = {}, Eggs = {},
-    conns = {}, running = true, active = false, InWild = false,
-    seq = 0,
-    runId = nil,        -- id ของรอบ (เกมใช้ค่าเดียวกันทุกครั้งที่ตีในรอบนั้น)
-    candidates = {},    -- id ที่อาจจะใช่ (หาจากข้อมูลที่เกมส่งมา)
-    creatureIds = {},   -- UUID ของตัวละคร (ไม่ใช่ id รอบ)
+    running = true, conns = {},
+    Units = {}, Dead = {}, Eggs = {}, Claimed = {},
+    InWild = false, entering = false, leftAt = 0,
+    runId = nil, runIdGuess = false, candidates = {}, creatureIds = {},
+    seq = 0, attackCount = 0,
+    curTarget = nil, curEgg = nil, claimGoal = nil,
+    stuck = false, lastTeleport = 0,
 }
 getgenv().WildAuto = W
 
-local function log(...)
-    print("[Auto]", ...)
-end
-
--- หยุดการทำงาน (หน้าต่างยังเปิดอยู่)
-function W.Halt()
-    if W.active then
-        W.active = false
-        W.fighting = false
-        log("สั่งหยุดแล้ว")
-    end
-end
-
--- ปิดทุกอย่าง (รวมหน้าต่าง)
 function W.Stop()
     if not W.running then return end
-    W.active = false
     W.running = false
-    for _, c in ipairs(W.conns) do c:Disconnect() end
+    for _, c in ipairs(W.conns) do pcall(function() c:Disconnect() end) end
     if getgenv().WildAuto == W then getgenv().WildAuto = nil end
-    rawprint("[Auto] ปิดแล้ว")
+    rawprint("[Wild] ปิดแล้ว")
     Window:Destroy()
 end
 
 ---------------------------------------------------------------------
 -- ตัวช่วย
 ---------------------------------------------------------------------
-local function guid()
-    return HttpService:GenerateGUID(false):lower()
-end
+local function guid() return HttpService:GenerateGUID(false):lower() end
 
 local function getRoot()
     local char = player.Character
     return char and char:FindFirstChild("HumanoidRootPart"), char and char:FindFirstChildOfClass("Humanoid")
 end
 
-local function flat(v)
-    return Vector3.new(v.X, 0, v.Z)
-end
+local function flat(v) return Vector3.new(v.X, 0, v.Z) end
 
 local function distTo(pos)
     local root = getRoot()
@@ -157,28 +139,30 @@ local function distTo(pos)
     return (flat(pos) - flat(root.Position)).Magnitude
 end
 
-local function enemyNum(id)
-    return tonumber(tostring(id):match("%d+")) or 0
-end
+local function enemyNum(id) return tonumber(tostring(id):match("%d+")) or 0 end
 
 local function isAlive(id)
-    if W.Dead[id] then return false end
+    if not id or W.Dead[id] then return false end
     local u = W.Units[id]
     return u ~= nil and (u.health == nil or u.health > 0)
 end
 
 ---------------------------------------------------------------------
--- หา id ของรอบ
+-- id ของรอบ (เกมใช้ค่าเดียวกันทุกครั้งที่ตีในรอบนั้น)
 ---------------------------------------------------------------------
 local UUID_PAT = "^%x%x%x%x%x%x%x%x%-%x%x%x%x%-%x%x%x%x%-%x%x%x%x%-%x%x%x%x%x%x%x%x%x%x%x%x$"
 
+local function setRunId(id, where)
+    if W.runId ~= id then
+        W.runId, W.runIdGuess = id, false
+        log("ได้ id ของรอบแล้ว (" .. where .. ")")
+    end
+end
+
 local function addCandidate(id, where)
     if W.runId or W.creatureIds[id] then return end
-    for _, c in ipairs(W.candidates) do
-        if c.id == id then return end
-    end
+    for _, c in ipairs(W.candidates) do if c.id == id then return end end
     table.insert(W.candidates, { id = id, where = where })
-    print("[Auto] เจอ id ที่อาจเป็นของรอบ: " .. id .. "  (จาก " .. where .. ")")
 end
 
 local function scanUUIDs(v, path, depth)
@@ -188,26 +172,58 @@ local function scanUUIDs(v, path, depth)
         if v:match(UUID_PAT) then addCandidate(v, path) end
     elseif type(v) == "table" then
         for k, val in pairs(v) do
-            -- ข้ามข้อมูลสัตว์/ไข่/หีบ (ยาวและไม่น่ามี)
             if not (depth == 0 and (k == "units" or k == "eggs" or k == "chests")) then
-                if type(k) == "string" and k:match(UUID_PAT) then addCandidate(k, path .. "[key]") end
+                if type(k) == "string" and k:match(UUID_PAT) then addCandidate(k, path) end
                 scanUUIDs(val, path .. "." .. tostring(k), depth + 1)
             end
         end
     end
 end
 
-local function setRunId(id, where)
-    if W.runId ~= id then
-        W.runId = id
-        W.runIdGuess = false
-        print("[Auto] ได้ id ของรอบแล้ว: " .. id .. "  (จาก " .. where .. ")")
+-- ดักการกดของเกมเอง → จับ id รอบ + sequence (hook ติดตั้งครั้งเดียว ใช้ร่วมกับสคริปต์รุ่นก่อนได้)
+getgenv().WildAutoOnCall = function(a1, a2)
+    local A = getgenv().WildAuto
+    if not A or type(a2) ~= "table" then return end
+    if type(a2.id) == "string" and a2.id:match(UUID_PAT) and (a1 == "Attack" or a1 == "ClaimEgg") then
+        setRunId(a2.id, "จากการกดของเกม")
+    end
+    if a1 == "Attack" and type(a2.sequence) == "number" then
+        A.seq = math.max(A.seq, a2.sequence)
     end
 end
 
+local hookOk = pcall(function()
+    if getgenv().WildAutoHookV3 then return end
+    getgenv().WildAutoHookV3 = true
+    local old
+    old = hookmetamethod(game, "__namecall", function(self, ...)
+        -- ห้ามเรียก method ของ Instance ก่อน old(...) ไม่งั้นคำสั่งของเกมเพี้ยน
+        if self == Request and not checkcaller() and getnamecallmethod() == "InvokeServer" then
+            local f = getgenv().WildAutoOnCall
+            if f then
+                local a1, a2 = ...
+                task.spawn(pcall, f, a1, a2)
+            end
+        end
+        return old(self, ...)
+    end)
+end)
+if not hookOk then log("executor ไม่รองรับ hookmetamethod — จับ id จากการกดของเกมไม่ได้") end
+
 ---------------------------------------------------------------------
--- รับข้อมูลจากเกม
+-- ข้อมูลจากเกม
 ---------------------------------------------------------------------
+local function resetZone()
+    table.clear(W.Units)
+    table.clear(W.Dead)
+    table.clear(W.Eggs)
+    table.clear(W.Claimed)
+    table.clear(W.candidates)
+    W.runId, W.runIdGuess = nil, false
+    W.seq, W.attackCount, W.clickTries, W.scanCount = 0, 0, 0, 0
+    W.curTarget, W.curEgg, W.claimGoal = nil, nil, nil
+end
+
 local function markDead(id)
     if not W.Dead[id] then
         W.Dead[id] = true
@@ -217,18 +233,25 @@ local function markDead(id)
     W.Units[id] = nil
 end
 
+local function leaveZone(reason)
+    if not W.InWild then return end
+    W.InWild = false
+    W.leftAt = os.clock()
+    log(reason)
+end
+
 table.insert(W.conns, Changed.OnClientEvent:Connect(function(data)
     if type(data) ~= "table" then return end
-    W.InWild = true
+
+    if data.reset then resetZone() end
+    -- ข้อมูลเริ่มรอบ (reset/eggs) = เข้าโซนแล้ว · ข้อมูลสัตว์อย่างเดียวนับเฉพาะเมื่อออกมานานแล้ว (กันข้อมูลค้างหลังตาย)
+    if not W.InWild and (data.reset or data.eggs or (data.units and os.clock() - W.leftAt > 10)) then
+        W.InWild = true
+        log("เข้าโซน Wild แล้ว")
+    end
     if not W.runId and (W.scanCount or 0) < 10 then
         W.scanCount = (W.scanCount or 0) + 1
         scanUUIDs(data, "WildChanged")
-    end
-
-    if data.reset then
-        table.clear(W.Units)
-        table.clear(W.Dead)
-        table.clear(W.Eggs)
     end
 
     if type(data.units) == "table" then
@@ -243,7 +266,6 @@ table.insert(W.conns, Changed.OnClientEvent:Connect(function(data)
             end
         end
     end
-
     if type(data.removed) == "table" then
         for _, id in pairs(data.removed) do markDead(id) end
     end
@@ -265,86 +287,86 @@ table.insert(W.conns, Changed.OnClientEvent:Connect(function(data)
     end
 
     if type(data.egg) == "table" and data.eggId then
-        log(string.format("เก็บแล้ว: %s  %s%s  ดาว %s  สถานะ %s",
-            tostring(data.eggId), tostring(data.egg.kind),
-            data.egg.shiny and (" " .. tostring(data.egg.shiny)) or "",
-            tostring(data.egg.hatchStars), tostring(data.egg.state)))
-        W.claimed = true
+        W.Claimed[data.eggId] = true
+        log(string.format("เก็บแล้ว: %s  %s%s  %s ดาว", tostring(data.eggId), tostring(data.egg.kind),
+            data.egg.shiny and (" " .. tostring(data.egg.shiny)) or "", tostring(data.egg.hatchStars)))
+        Window:Notify({ Title = "เก็บไข่แล้ว", Content = string.format("%s  %s  %s ดาว",
+            tostring(data.egg.kind), tostring(data.egg.shiny or ""), tostring(data.egg.hatchStars)),
+            Color = Col.Green })
+        if W.claimReturning then
+            W.claimReturning = false
+            leaveZone("เก็บไข่แล้ว ออกจากโซน")
+        end
     end
 end))
 
--- ดักการกดของเกมเอง: จับ id รอบ + เลข sequence ล่าสุด
--- (hook ติดตั้งครั้งเดียว แต่เรียกฟังก์ชันล่าสุดผ่าน getgenv เสมอ → รันสคริปต์ใหม่ก็ยังใช้ได้)
-getgenv().WildAutoOnCall = function(a1, a2)
-    local A = getgenv().WildAuto
-    if not A or type(a2) ~= "table" then return end
-    if type(a2.id) == "string" and a2.id:match(UUID_PAT)
-        and (a1 == "Attack" or a1 == "ClaimEgg") then
-        setRunId(a2.id, "การกด " .. tostring(a1) .. " ของเกม")
-    end
-    if a1 == "Attack" and type(a2.sequence) == "number" then
-        A.seq = math.max(A.seq, a2.sequence)
-    end
-end
-
-local hookOk = pcall(function()
-    if getgenv().WildAutoHookV3 then return end
-    getgenv().WildAutoHookV3 = true
-    local old
-    old = hookmetamethod(game, "__namecall", function(self, ...)
-        -- สำคัญ: ห้ามเรียก method ของ Instance ก่อน old(...) ไม่งั้นคำสั่งของเกมจะเพี้ยน
-        if self == Request and not checkcaller() and getnamecallmethod() == "InvokeServer" then
-            local f = getgenv().WildAutoOnCall
-            if f then
-                local a1, a2 = ...
-                task.spawn(pcall, f, a1, a2) -- ทำทีหลัง ไม่ยุ่งกับคำสั่งของเกม
+-- ตาย
+local function watchCharacter(char)
+    local hum = char:WaitForChild("Humanoid", 10)
+    if not hum then return end
+    table.insert(W.conns, hum.Died:Connect(function()
+        if W.InWild then
+            if CFG.LEARN_LIMIT and W.curTarget then
+                local n = enemyNum(W.curTarget)
+                local old = getgenv().WildAutoFailNum
+                if not old or n < old then
+                    getgenv().WildAutoFailNum = n
+                    log("จำไว้: สู้ " .. W.curTarget .. " ไม่ไหว")
+                end
             end
+            leaveZone("ตัวละครตาย ออกจากโซน")
         end
-        return old(self, ...)
-    end)
-end)
-if not hookOk then
-    log("executor ไม่รองรับ hookmetamethod — จะหา id รอบจากข้อมูลเกมแทน")
+    end))
 end
+if player.Character then task.spawn(watchCharacter, player.Character) end
+table.insert(W.conns, player.CharacterAdded:Connect(function(char)
+    leaveZone("ตัวละครเกิดใหม่ ออกจากโซน")
+    task.spawn(watchCharacter, char)
+end))
+
+-- หลุดโซน (ถูกย้ายไกลทันที) + เช็กว่าเดินติด
+task.spawn(function()
+    local lastPos
+    local stillSince
+    while W.running do
+        local root = getRoot()
+        if root then
+            local pos = root.Position
+            if lastPos and W.InWild and (pos - lastPos).Magnitude > 300
+                and os.clock() - W.lastTeleport > 1 then
+                leaveZone("ถูกย้ายออกจากโซน")
+            end
+            lastPos = pos
+            if root.AssemblyLinearVelocity.Magnitude < 1.5 then
+                stillSince = stillSince or os.clock()
+            else
+                stillSince = nil
+            end
+            W.stuck = stillSince ~= nil and os.clock() - stillSince > 0.6
+        end
+        task.wait(0.2)
+    end
+end)
 
 ---------------------------------------------------------------------
--- คลิกหน้าจอเอง (ให้เกมตีเอง → สคริปต์จับ id รอบได้)
+-- การกระทำ
 ---------------------------------------------------------------------
-local VIM = nil
+local VIM
 pcall(function() VIM = game:GetService("VirtualInputManager") end)
 
 local function autoClick()
     local cam = workspace.CurrentCamera
     local size = cam and cam.ViewportSize or Vector2.new(800, 600)
-    -- คลิกกลางจอค่อนลงล่างนิด (ปกติไม่มีปุ่ม UI ตรงนี้)
     local x, y = math.floor(size.X / 2), math.floor(size.Y * 0.55)
-
-    if VIM then
-        local ok = pcall(function()
-            VIM:SendMouseButtonEvent(x, y, 0, true, game, 0)
-            task.wait(0.05)
-            VIM:SendMouseButtonEvent(x, y, 0, false, game, 0)
-        end)
-        if ok then return true end
-    end
-    if mouse1click then
-        local ok = pcall(mouse1click)
-        if ok then return true end
-    end
-    if mouse1press and mouse1release then
-        local ok = pcall(function()
-            mouse1press()
-            task.wait(0.05)
-            mouse1release()
-        end)
-        if ok then return true end
-    end
+    if VIM and pcall(function()
+        VIM:SendMouseButtonEvent(x, y, 0, true, game, 0)
+        task.wait(0.05)
+        VIM:SendMouseButtonEvent(x, y, 0, false, game, 0)
+    end) then return true end
+    if mouse1click and pcall(mouse1click) then return true end
     return false
 end
 
----------------------------------------------------------------------
--- การกระทำ
----------------------------------------------------------------------
 local function attack(targetId, targetPos)
     local root = getRoot()
     if not root or not W.runId then return false end
@@ -352,46 +374,37 @@ local function attack(targetId, targetPos)
     dir = dir.Magnitude > 0.01 and dir.Unit or Vector3.new(0, 0, -1)
     W.seq += 1
     local ok, res = pcall(function()
-        return Request:InvokeServer("Attack", {
-            id = W.runId,
-            direction = dir,
-            sequence = W.seq,
-            targetId = targetId,
-        })
+        return Request:InvokeServer("Attack", { id = W.runId, direction = dir, sequence = W.seq, targetId = targetId })
     end)
-    W.attackCount = (W.attackCount or 0) + 1
+    W.attackCount += 1
     if not ok then
         log("Attack error:", res)
-    elseif CFG.DEBUG_ATTACK and (W.attackCount <= 5 or W.attackCount % 20 == 0) then
+    elseif CFG.DEBUG_ATTACK and (W.attackCount <= 3 or W.attackCount % 20 == 0) then
         local u = W.Units[targetId]
-        local resText = tostring(res)
+        local r = res
         if type(res) == "table" then
-            local parts = {}
-            for k, v in pairs(res) do table.insert(parts, tostring(k) .. "=" .. tostring(v)) end
-            resText = "{" .. table.concat(parts, ", ") .. "}"
+            local p = {}
+            for k, v in pairs(res) do table.insert(p, tostring(k) .. "=" .. tostring(v)) end
+            r = "{" .. table.concat(p, ", ") .. "}"
         end
-        log(string.format("ตีครั้งที่ %d → %s  seq=%d  ระยะ %.0f  HP สัตว์ %s  ผล=%s",
-            W.attackCount, targetId, W.seq, distTo(targetPos),
-            tostring(u and math.floor(u.health or 0) or "?"), resText))
+        log(string.format("ตีครั้งที่ %d → %s  ระยะ %.0f  HP %s  ผล=%s", W.attackCount, targetId,
+            distTo(targetPos), tostring(u and math.floor(u.health or 0) or "?"), tostring(r)))
     end
-    return ok, res
+    return ok
 end
 
--- เข้าใกล้ตำแหน่ง (เรียกซ้ำในลูปได้) คืนค่า true ถ้าถึงระยะแล้ว
 local function approach(pos, range)
     local root, hum = getRoot()
     if not root or typeof(pos) ~= "Vector3" then return false end
     if distTo(pos) <= range then return true end
-
     if CFG.TELEPORT then
-        local from = flat(root.Position)
-        local to = flat(pos)
-        local back = (from - to)
+        local from, to = flat(root.Position), flat(pos)
+        local back = from - to
         back = back.Magnitude > 0.01 and back.Unit or Vector3.new(0, 0, 1)
         local stand = to + back * math.max(range - 3, 2)
         local y = root.Position.Y
+        W.lastTeleport = os.clock()
         root.CFrame = CFrame.new(Vector3.new(stand.X, y, stand.Z), Vector3.new(to.X, y, to.Z))
-        task.wait(0.1)
     elseif hum then
         hum:MoveTo(Vector3.new(pos.X, root.Position.Y, pos.Z))
     end
@@ -399,33 +412,114 @@ local function approach(pos, range)
 end
 
 local function claimEgg(slot)
+    W.claimReturning = CFG.RETURN_AFTER
     local ok, res = pcall(function()
-        return Request:InvokeServer("ClaimEgg", {
-            id = W.runId or guid(),
-            returning = CFG.RETURN_AFTER,
-            eggId = slot,
-        })
+        return Request:InvokeServer("ClaimEgg", { id = W.runId or guid(), returning = CFG.RETURN_AFTER, eggId = slot })
     end)
-    log("ClaimEgg", slot, ok, res)
+    if not ok then log("ClaimEgg error:", res) end
     return ok
 end
 
--- หาโมเดลไข่ที่ดรอปแล้วของเรา จากสัตว์ตัวนี้
-local function findDroppedEgg(enemyId)
+local function droppedEggs()
+    local out = {}
     local ial = workspace:FindFirstChild("ImpossibleAnimalsLocal")
     local vis = ial and ial:FindFirstChild("WildVisuals")
     local sw = vis and vis:FindFirstChild("StreamedWilderness")
     local folder = sw and sw:FindFirstChild("WildEggs")
-    if not folder then return nil end
+    if not folder then return out end
     for _, m in ipairs(folder:GetChildren()) do
-        if m:GetAttribute("EnemyId") == enemyId and m:GetAttribute("OwnerUserId") == player.UserId then
-            return m
+        if m:GetAttribute("OwnerUserId") == player.UserId then
+            local enemyId = m:GetAttribute("EnemyId")
+            for _, e in pairs(W.Eggs) do
+                if e.enemyId == enemyId and not W.Claimed[e.slot] then
+                    table.insert(out, { egg = e, model = m })
+                    break
+                end
+            end
         end
     end
+    return out
+end
+
+local function enterWild()
+    if W.entering then return false end
+    W.entering = true
+    local function done(v) W.entering = false return v end
+
+    log("กด Wild...")
+    resetZone()
+    local ok, res = pcall(function() return Request:InvokeServer("Create", { teleport = true }) end)
+    if not ok then log("Create error:", res) return done(false) end
+    scanUUIDs(res, "Create")
+
+    local creatures
+    pcall(function()
+        creatures = player:WaitForChild("PlayerGui"):WaitForChild("ImpossibleAnimals", 10):WaitForChild("Root", 10)
+            :WaitForChild("WildPicker", 10):WaitForChild("Popup", 10):WaitForChild("Creatures", 10)
+    end)
+    if not creatures then log("ไม่เจอหน้าเลือกตัวละคร") return done(false) end
+
+    local card
+    for _ = 1, 40 do
+        card = creatures:FindFirstChild("Creature" .. CFG.PICK)
+        if card and card:GetAttribute("CreatureId") then break end
+        task.wait(0.25)
+    end
+    if not card or not card:GetAttribute("CreatureId") then
+        log("ไม่เจอ Creature" .. CFG.PICK)
+        return done(false)
+    end
+    task.wait(0.5)
+    for _, c in ipairs(creatures:GetChildren()) do
+        local cid = c:GetAttribute("CreatureId")
+        if cid then W.creatureIds[cid] = true end
+    end
+    local nameLbl = card:FindFirstChild("Content") and card.Content:FindFirstChild("Title")
+        and card.Content.Title:FindFirstChild("CreatureName")
+    log("เลือก Creature" .. CFG.PICK .. " " .. (nameLbl and nameLbl.Text or ""))
+
+    local ok2, res2 = pcall(function()
+        return Request:InvokeServer("Ready", { card:GetAttribute("CreatureId") })
+    end)
+    if not ok2 then log("Ready error:", res2) return done(false) end
+    scanUUIDs(res2, "Ready")
+
+    for _ = 1, 40 do
+        if W.InWild then break end
+        task.wait(0.25)
+    end
+    return done(W.InWild)
+end
+
+-- หา id รอบ: ลองค่าที่เจอในข้อมูลก่อน → ไม่มีก็คลิกจอให้เกมตีเอง
+local function ensureRunId(target)
+    if W.runId then return true end
+    local c = table.remove(W.candidates, 1)
+    if c then
+        W.runId, W.runIdGuess, W.guessHp, W.guessAttacks = c.id, true, nil, 0
+        return true
+    end
+    if CFG.AUTO_GET_ID then
+        W.clickTries = (W.clickTries or 0) + 1
+        if W.clickTries <= 10 then
+            if W.clickTries == 1 then log("ยังไม่รู้ id ของรอบ — คลิกจอให้เกมตีหนึ่งที") end
+            autoClick()
+            for _ = 1, 10 do
+                if W.runId then return true end
+                task.wait(0.1)
+            end
+            return false
+        end
+    end
+    if os.clock() - (W.lastAskLog or 0) > 5 then
+        W.lastAskLog = os.clock()
+        log("ยังไม่รู้ id ของรอบ — กดตีเองหนึ่งครั้ง (ตีลมก็ได้)")
+    end
+    return false
 end
 
 ---------------------------------------------------------------------
--- เลือกไข่
+-- เลือกไข่ / เลือกสัตว์
 ---------------------------------------------------------------------
 local function eggList()
     local list = {}
@@ -440,477 +534,276 @@ local function eggList()
     return list
 end
 
-local function printEggs(list)
-    print("")
-    print("================ ไข่ในโซน (" .. #list .. " ใบ) ================")
-    print(string.format("%-7s %-5s %-10s %-8s %-5s %-6s %s", "ไข่", "tier", "ชนิด", "shiny", "ดาว", "สัตว์", "ห่าง"))
-    for _, e in ipairs(list) do
-        print(string.format("%-7s %-5s %-10s %-8s %-5s %-6s %.0f",
-            tostring(e.slot), tostring(e.tier), tostring(e.kind),
-            e.shiny and tostring(e.shiny) or "-", tostring(e.hatchStars),
-            tostring(e.enemyId), distTo(e.position)))
-    end
-    print("============================================================")
-end
-
-local function chooseEgg(list)
-    if CFG.TARGET_EGG and W.Eggs[CFG.TARGET_EGG] then
-        return W.Eggs[CFG.TARGET_EGG]
-    end
-    local failNum = CFG.LEARN_LIMIT and getgenv().WildAutoFailNum or nil
-    for _, e in ipairs(list) do
-        local okTier = not CFG.MAX_EGG_TIER or (e.tier or 0) <= CFG.MAX_EGG_TIER
-        local okFail = not failNum or enemyNum(e.enemyId) < failNum
-        if okTier and okFail then
-            return e
-        end
-    end
-end
-
--- สัตว์ตัวถัดไปที่ต้องตี
-local function nextEnemy(targetEnemy)
-    if not CFG.KILL_IN_ORDER then
-        return isAlive(targetEnemy) and targetEnemy or nil
-    end
-    local limit = enemyNum(targetEnemy)
-    local best, bestN
-    for id in pairs(W.Units) do
-        local n = enemyNum(id)
-        if n <= limit and isAlive(id) and (not bestN or n < bestN) then
-            best, bestN = id, n
-        end
-    end
-    return best
-end
-
----------------------------------------------------------------------
--- ล้างข้อมูลรอบ / ตรวจว่าตายหรือหลุดออกจากโซน
----------------------------------------------------------------------
-local function resetRound()
-    table.clear(W.Units)
-    table.clear(W.Dead)
-    table.clear(W.Eggs)
-    table.clear(W.candidates)
-    W.runId, W.runIdGuess = nil, false
-    W.seq = 0
-    W.claimed = false
-    W.InWild = false
-    W.scanCount = 0
-    W.clickTries = 0
-    W.stillSince = nil
-    W.attackCount = 0
-    W.died, W.left = false, false
-    W.claiming = false
-    W.lastPos = nil
-    W.curEgg, W.curTarget = nil, nil
-end
-
--- ตาย: ตัวละครตาย หรือได้ตัวละครใหม่
-local function watchCharacter(char)
-    local hum = char:WaitForChild("Humanoid", 10)
-    if hum then
-        table.insert(W.conns, hum.Died:Connect(function()
-            if W.fighting then
-                W.died = true
-            end
-        end))
-    end
-end
-if player.Character then task.spawn(watchCharacter, player.Character) end
-table.insert(W.conns, player.CharacterAdded:Connect(function(char)
-    if W.fighting then W.died = true end
-    task.spawn(watchCharacter, char)
-end))
-
--- หลุดออกจากโซน: ตัวละครถูกย้ายไกลทันที (โดยที่เราไม่ได้วาร์ปเอง)
-local function checkLeft()
-    local root = getRoot()
-    if not root then return end
-    local pos = root.Position
-    if W.lastPos and not CFG.TELEPORT and (pos - W.lastPos).Magnitude > 300 then
-        W.left = true
-    end
-    W.lastPos = pos
-end
-
----------------------------------------------------------------------
--- STEP 1: กด Wild + เลือกตัว
----------------------------------------------------------------------
-local function autoStart()
-    log("กด Wild...")
-    local ok, res = pcall(function()
-        return Request:InvokeServer("Create", { teleport = true })
-    end)
-    if ok then scanUUIDs(res, "Create") end
-    if not ok then
-        log("Create error:", res)
-        return false
-    end
-
-    local creatures
-    pcall(function()
-        creatures = player:WaitForChild("PlayerGui")
-            :WaitForChild("ImpossibleAnimals", 10):WaitForChild("Root", 10)
-            :WaitForChild("WildPicker", 10):WaitForChild("Popup", 10)
-            :WaitForChild("Creatures", 10)
-    end)
-    if not creatures then
-        log("ไม่เจอหน้าเลือกตัวละคร")
-        return false
-    end
-
-    local card
-    for _ = 1, 40 do
-        card = creatures:FindFirstChild("Creature" .. CFG.PICK)
-        if card and card:GetAttribute("CreatureId") then break end
-        task.wait(0.25)
-    end
-    if not card or not card:GetAttribute("CreatureId") then
-        log("ไม่เจอ Creature" .. CFG.PICK)
-        return false
-    end
-    task.wait(0.5)
-
-    local name = card:FindFirstChild("Content") and card.Content:FindFirstChild("Title")
-        and card.Content.Title:FindFirstChild("CreatureName")
-    log("เลือก Creature" .. CFG.PICK, name and name.Text or "")
-
-    -- UUID ของตัวละครทุกตัวไม่ใช่ id รอบ
-    for _, c in ipairs(creatures:GetChildren()) do
-        local cid = c:GetAttribute("CreatureId")
-        if cid then W.creatureIds[cid] = true end
-    end
-    local ok2, res2 = pcall(function()
-        return Request:InvokeServer("Ready", { card:GetAttribute("CreatureId") })
-    end)
-    if ok2 then scanUUIDs(res2, "Ready") end
-    if not ok2 then
-        log("Ready error:", res2)
-        return false
-    end
+local function eggAllowed(e)
+    if W.Claimed[e.slot] then return false end
+    if CFG.MAX_EGG_TIER and (e.tier or 0) > CFG.MAX_EGG_TIER then return false end
+    local fail = CFG.LEARN_LIMIT and getgenv().WildAutoFailNum
+    if fail and enemyNum(e.enemyId) >= fail then return false end
     return true
 end
 
----------------------------------------------------------------------
--- STEP 2+: เล่นหนึ่งรอบ → คืนค่า "claimed" / "died" / "fail" / "stopped"
----------------------------------------------------------------------
-local function runOnce(isRestart)
-    local startTime = os.clock()
-    resetRound()
-
-    if CFG.AUTO_START or isRestart then
-        local started = false
-        for try = 1, 5 do
-            if not W.active then return "stopped" end
-            if autoStart() then started = true break end
-            log("เริ่มรอบไม่สำเร็จ ลองใหม่ใน 3 วิ (" .. try .. "/5)")
-            task.wait(3)
-        end
-        if not started then return "fail" end
+local function targetEgg()
+    if CFG.TARGET_EGG then
+        local e = W.Eggs[CFG.TARGET_EGG]
+        if e and not W.Claimed[e.slot] then return e end
     end
-
-    -- รอข้อมูลโซน
-    log("รอข้อมูลโซน...")
-    local t = 0
-    while W.active and (not W.InWild or next(W.Eggs) == nil) and t < 20 do
-        task.wait(0.5)
-        t += 0.5
+    for _, e in ipairs(eggList()) do
+        if eggAllowed(e) then return e end
     end
-    if not next(W.Eggs) then
-        log("ไม่ได้รับรายการไข่ (ยังไม่ได้เข้าโซน?)")
-        return "fail"
-    end
-    task.wait(1) -- เผื่อข้อมูลสัตว์มาไม่ครบ
+end
 
-    local list = eggList()
-    printEggs(list)
-    local egg = chooseEgg(list)
-    if not egg then
-        log("ไม่มีไข่ที่ตรงเงื่อนไข")
-        return "noegg"
-    end
-    W.curEgg = egg
-    log(string.format("เป้าหมาย: %s  %s%s  ดาว %s  (ต้องฆ่า %s, tier %s)",
-        egg.slot, tostring(egg.kind), egg.shiny and (" " .. tostring(egg.shiny)) or "",
-        tostring(egg.hatchStars), tostring(egg.enemyId), tostring(egg.tier)))
-
-    local current
-    local deadAt
-    W.fighting = true
-    W.lastPos = nil
-
-    while W.active do
-        if os.clock() - startTime > CFG.MAX_RUNTIME then
-            log("รอบนี้นานเกิน MAX_RUNTIME — ถือว่าค้าง")
-            W.fighting = false
-            return "died"
-        end
-        if W.claimed then
-            W.fighting = false
-            task.wait(2)
-            return "claimed"
-        end
-
-        if not W.claiming then checkLeft() end
-        if (W.died or W.left) and not W.claiming then
-            W.fighting = false
-            log(W.died and "ตัวละครตาย!" or "หลุดออกจากโซน!")
-            if current and CFG.LEARN_LIMIT and not W.claimed then
-                local n = enemyNum(current)
-                local old = getgenv().WildAutoFailNum
-                if not old or n < old then
-                    getgenv().WildAutoFailNum = n
-                    log("จำไว้: สู้ " .. current .. " ไม่ไหว รอบหน้าจะเลือกไข่ที่ต่ำกว่า e" .. n)
-                end
+local function getTarget()
+    local mode = CFG.TARGET_MODE
+    if mode == "Selected" then
+        return isAlive(CFG.TARGET_ENEMY) and CFG.TARGET_ENEMY or nil
+    elseif mode == "Nearest" then
+        local best, bd
+        for id, u in pairs(W.Units) do
+            if isAlive(id) then
+                local d = distTo(u.position)
+                if not bd or d < bd then best, bd = id, d end
             end
-            return "died"
         end
+        return best
+    elseif mode == "Lowest" then
+        local best, bn
+        for id in pairs(W.Units) do
+            if isAlive(id) and (not bn or enemyNum(id) < bn) then best, bn = id, enemyNum(id) end
+        end
+        return best
+    else -- Egg
+        local egg = targetEgg()
+        W.curEgg = egg
+        if not egg then return nil end
+        if not CFG.KILL_IN_ORDER then
+            return isAlive(egg.enemyId) and egg.enemyId or nil
+        end
+        local limit, best, bn = enemyNum(egg.enemyId), nil, nil
+        for id in pairs(W.Units) do
+            local n = enemyNum(id)
+            if n <= limit and isAlive(id) and (not bn or n < bn) then best, bn = id, n end
+        end
+        return best
+    end
+end
 
-        local root = getRoot()
-        if not root then
-            task.wait(0.5)
-        elseif isAlive(egg.enemyId) or (CFG.KILL_IN_ORDER and nextEnemy(egg.enemyId)) then
-            -- ยังต้องตีอยู่
-            if not CFG.AUTO_ATTACK then
-                task.wait(0.5)
-            else
-                local target = nextEnemy(egg.enemyId)
-                if target then
-                    if target ~= current then
-                        current = target
-                        W.curTarget = target
-                        local u = W.Units[target]
-                        log(string.format("ไปตี %s (%s Lv.%s HP %s)", target,
-                            u.entry and u.entry.name or "?",
-                            tostring(u.entry and u.entry.level or "?"),
-                            tostring(math.floor(u.health or 0))))
-                    end
-                    local u = W.Units[target]
-                    if u and u.position then
-                        local close = approach(u.position, CFG.ATTACK_RANGE)
-                        local d = distTo(u.position)
+---------------------------------------------------------------------
+-- ลูปของแต่ละฟังก์ชัน (ทำงานเฉพาะตอนเปิดสวิตช์)
+---------------------------------------------------------------------
+-- เข้า Wild เอง
+task.spawn(function()
+    while W.running do
+        if CFG.AUTO_ENTER and not W.InWild and not W.entering
+            and os.clock() - W.leftAt >= CFG.ENTER_DELAY and getRoot() then
+            if not enterWild() then task.wait(3) end
+        end
+        task.wait(0.5)
+    end
+end)
 
-                        -- เช็กว่าเดินต่อไม่ได้ (ความเร็วแทบเป็น 0)
-                        local r = getRoot()
-                        local still = r and r.AssemblyLinearVelocity.Magnitude < 1.5
-                        if still then
-                            W.stillSince = W.stillSince or os.clock()
-                        else
-                            W.stillSince = nil
+-- เลือกเป้าหมาย + ตี
+task.spawn(function()
+    local lastTarget
+    while W.running do
+        if W.InWild then
+            local target = getTarget()
+            W.curTarget = target
+            if target ~= lastTarget and target and CFG.AUTO_ATTACK then
+                local u = W.Units[target]
+                log(string.format("เป้าหมาย: %s (%s Lv.%s)", target, u and u.entry and u.entry.name or "?",
+                    tostring(u and u.entry and u.entry.level or "?")))
+            end
+            lastTarget = target
+
+            if CFG.AUTO_ATTACK and target and not W.claimGoal then
+                local u = W.Units[target]
+                local d = u and distTo(u.position) or math.huge
+                local inRange = d <= CFG.ATTACK_RANGE or ((W.stuck or not CFG.AUTO_MOVE) and d <= CFG.STUCK_RANGE)
+                if inRange then
+                    if ensureRunId(target) then
+                        attack(target, u.position)
+                        if W.runIdGuess then
+                            local hp = u.health or 0
+                            W.guessHp = W.guessHp or hp
+                            W.guessAttacks += 1
+                            if hp < W.guessHp or not isAlive(target) then
+                                W.runIdGuess = false
+                                log("ได้ id ของรอบแล้ว (เดาถูก)")
+                            elseif W.guessAttacks >= 8 then
+                                W.runId = nil
+                            end
                         end
-                        local stuck = W.stillSince and (os.clock() - W.stillSince) > 0.6
-
-                        if (close or (stuck and d <= CFG.STUCK_RANGE)) and not W.runId then
-                            -- ยังไม่รู้ id รอบ → ลองเดาจาก candidates ก่อน
-                            local c = table.remove(W.candidates, 1)
-                            if c then
-                                W.runId = c.id
-                                W.runIdGuess = true
-                                W.guessHp = nil
-                                W.guessAttacks = 0
-                                log("ลองใช้ id " .. c.id .. " (จาก " .. c.where .. ")")
-                            else
-                                -- ไม่รู้ id → คลิกหน้าจอเองให้เกมตี แล้วจับ id จากการตีนั้น
-                                W.clickTries = (W.clickTries or 0) + 1
-                                if W.clickTries <= 10 then
-                                    if W.clickTries == 1 then
-                                        log("ยังไม่รู้ id ของรอบ — คลิกหน้าจอเองเพื่อให้เกมตี...")
-                                    end
-                                    if not autoClick() then
-                                        W.clickTries = 99
-                                        log("executor คลิกเองไม่ได้")
-                                    end
-                                    -- รอให้ hook จับ id
-                                    for _ = 1, 10 do
-                                        if W.runId then break end
-                                        task.wait(0.1)
-                                    end
-                                elseif os.clock() - (W.lastAskLog or 0) > 4 then
-                                    W.lastAskLog = os.clock()
-                                    log(">>> คลิกเองแล้วยังไม่ได้ id — กดตีเองหนึ่งครั้ง (ตีลมก็ได้) <<<")
-                                    task.wait(0.3)
-                                else
-                                    task.wait(0.3)
-                                end
-                            end
-                        elseif close or (stuck and d <= CFG.STUCK_RANGE) then
-                            attack(target, u.position)
-                            -- ถ้า id เป็นแค่การเดา: ตี 8 ครั้งแล้ว HP ไม่ลด = id ผิด
-                            if W.runIdGuess then
-                                local hp = u.health or 0
-                                W.guessHp = W.guessHp or hp
-                                W.guessAttacks += 1
-                                if hp < W.guessHp or not isAlive(target) then
-                                    W.runIdGuess = false
-                                    log("id ถูกต้อง ตีเข้าแล้ว")
-                                elseif W.guessAttacks >= 8 then
-                                    log("id " .. W.runId .. " ตีไม่เข้า ลองตัวถัดไป")
-                                    W.runId = nil
-                                end
-                            end
-                            task.wait(CFG.ATTACK_DELAY)
-                        else
-                            if CFG.DEBUG_ATTACK and os.clock() - (W.lastDistLog or 0) > 2 then
-                                W.lastDistLog = os.clock()
-                                log(string.format("กำลังเดินไป %s  ระยะ %.0f%s", target, d,
-                                    stuck and "  (ติด เดินต่อไม่ได้)" or ""))
-                            end
-                            task.wait(0.2)
-                        end
-                    else
-                        task.wait(0.2)
                     end
+                    task.wait(CFG.ATTACK_DELAY)
                 else
-                    task.wait(0.3)
+                    task.wait(0.2)
                 end
+            else
+                task.wait(0.25)
             end
         else
-            -- สัตว์เป้าหมายตายแล้ว → ไปเก็บไข่
-            if not CFG.AUTO_CLAIM then
-                log("สัตว์เป้าหมายตายแล้ว — AUTO_CLAIM ปิดอยู่ ไปเก็บเองได้เลย")
-                W.fighting = false
-                return "stopped"
-            end
-            deadAt = deadAt or os.clock()
-            local model = findDroppedEgg(egg.enemyId)
-            local pos = model and model:GetPivot().Position or egg.position
-            if not model and os.clock() - deadAt < 5 then
-                task.wait(0.3) -- รอไข่ดรอป
-            elseif approach(pos, 5) then
-                W.claiming = true -- เก็บไข่แล้วเกมจะส่งกลับฐาน ไม่ใช่การหลุด
-                claimEgg(egg.slot)
-                -- รอผลยืนยัน
-                for _ = 1, 20 do
-                    if W.claimed then break end
-                    task.wait(0.25)
-                end
-                if not W.claimed then
-                    log("ยังไม่ได้รับยืนยันการเก็บ ลองใหม่...")
-                    task.wait(1)
-                end
-            else
-                task.wait(0.2)
-            end
-        end
-    end
-
-    W.fighting = false
-    return "stopped"
-end
-
----------------------------------------------------------------------
--- ลูปนอก: ตาย/หลุด → รอแล้วเริ่มใหม่
----------------------------------------------------------------------
-function W.Start()
-    if W.active then
-        log("กำลังทำงานอยู่แล้ว")
-        return
-    end
-    W.active = true
-    W.restarts = 0
-    log("เริ่มทำงาน")
-    task.spawn(function()
-    local restarts = 0
-    local result = runOnce(false)
-
-    while W.active and CFG.AUTO_RESTART and (result == "died" or result == "fail")
-        and restarts < CFG.MAX_RESTARTS do
-        restarts += 1
-        W.restarts = restarts
-        log(string.format("เริ่มรอบใหม่ใน 5 วิ... (ครั้งที่ %d/%d)", restarts, CFG.MAX_RESTARTS))
-        task.wait(5)
-        -- รอให้ตัวละครเกิดใหม่
-        for _ = 1, 20 do
-            if getRoot() then break end
+            W.curTarget = nil
             task.wait(0.5)
         end
-        task.wait(2)
-        if not W.active then break end
-        result = runOnce(true)
     end
+end)
 
-    if result == "claimed" then
-        log("เสร็จ! เก็บไข่แล้ว")
-    elseif result == "noegg" then
-        log("ไม่มีไข่ที่สู้ไหว — ลองเปลี่ยนตัวละครที่แข็งกว่า หรือล้างค่าที่จำไว้ด้วย getgenv().WildAutoFailNum = nil")
-    elseif restarts >= CFG.MAX_RESTARTS then
-        log("เริ่มใหม่ครบ " .. CFG.MAX_RESTARTS .. " ครั้งแล้ว หยุด")
+-- เดิน
+task.spawn(function()
+    while W.running do
+        if CFG.AUTO_MOVE and W.InWild then
+            if W.claimGoal then
+                approach(W.claimGoal, 5)
+            elseif W.curTarget and W.Units[W.curTarget] then
+                approach(W.Units[W.curTarget].position, CFG.ATTACK_RANGE)
+            end
+        end
+        task.wait(0.2)
     end
-    W.active = false
-    W.fighting = false
-    W.curTarget = nil
-    log("จบการทำงาน")
+end)
+
+-- เก็บไข่
+local function pickClaimable()
+    local drops = droppedEggs()
+    if #drops == 0 then return nil end
+    if CFG.CLAIM_MODE == "Target" then
+        local te = targetEgg()
+        for _, d in ipairs(drops) do
+            if te and d.egg.slot == te.slot then return d end
+        end
+        return nil
+    end
+    table.sort(drops, function(a, b)
+        local sa, sb = a.egg.hatchStars or 0, b.egg.hatchStars or 0
+        if sa ~= sb then return sa > sb end
+        return (a.egg.shiny and 1 or 0) > (b.egg.shiny and 1 or 0)
     end)
+    if CFG.CLAIM_MODE == "Best" then
+        -- เก็บเฉพาะเมื่อใบที่ดรอปดีที่สุดในบรรดาไข่ที่เหลือทั้งหมด
+        local te = targetEgg()
+        if te and (drops[1].egg.hatchStars or 0) < (te.hatchStars or 0) then return nil end
+    end
+    return drops[1]
 end
 
-
-
+task.spawn(function()
+    while W.running do
+        if CFG.AUTO_CLAIM and W.InWild then
+            local d = pickClaimable()
+            if d then
+                local pos = d.model:GetPivot().Position
+                W.claimGoal = pos
+                if distTo(pos) <= 6 or not CFG.AUTO_MOVE then
+                    log("เก็บไข่ " .. d.egg.slot .. " ...")
+                    claimEgg(d.egg.slot)
+                    for _ = 1, 20 do
+                        if W.Claimed[d.egg.slot] then break end
+                        task.wait(0.25)
+                    end
+                    W.claimGoal = nil
+                end
+            else
+                W.claimGoal = nil
+            end
+        else
+            W.claimGoal = nil
+        end
+        task.wait(0.3)
+    end
+end)
 
 ---------------------------------------------------------------------
--- UI: ผูกปุ่มกับค่าตั้งค่า
+-- UI
 ---------------------------------------------------------------------
 local function bind(key) return function(v) CFG[key] = v end end
+local switches = {}
 
--- ===== Control =====
-local status = pControl:AddStatusCard({
-    Header = "Status", State = "Idle", ButtonText = "Run",
+-- ===== Main =====
+local status = pMain:AddStatusCard({
+    Header = "Status", State = "Lobby", ButtonText = "Enter Wild",
     Callback = function()
-        if W.active then W.Halt() else W.Start() end
+        if W.InWild then
+            Window:Notify({ Title = "อยู่ในโซนแล้ว", Duration = 2 })
+        else
+            task.spawn(enterWild)
+        end
     end,
 })
 
-local sRound = pControl:AddSection("Round")
-sRound:AddToggle({ Title = "Auto start", Description = "กด Wild และเลือกตัวละครให้เอง",
-    Default = CFG.AUTO_START, Callback = bind("AUTO_START") })
-sRound:AddStepper({ Title = "Creature", Description = "ใช้ตัวละครลำดับที่ (1 = ตัวดีสุดตามเกม)",
+local sEnter = pMain:AddSection("Enter Wild")
+switches.enter = sEnter:AddToggle({ Title = "Auto enter", Description = "ไม่ได้อยู่ในโซน → เข้า Wild เอง (ตาย/เก็บไข่ก็เข้าใหม่)",
+    Default = CFG.AUTO_ENTER, Callback = bind("AUTO_ENTER") })
+sEnter:AddStepper({ Title = "Creature", Description = "ใช้ตัวละครลำดับที่ (1 = ตัวดีสุดตามเกม)",
     Default = CFG.PICK, Step = 1, Min = 1, Max = 30, Format = "#%d", Callback = bind("PICK") })
-sRound:AddToggle({ Title = "Auto restart", Description = "ตาย / หลุดโซน → เริ่มรอบใหม่เอง",
-    Default = CFG.AUTO_RESTART, Callback = bind("AUTO_RESTART") })
-sRound:AddStepper({ Title = "Max restarts", Description = "เริ่มใหม่ได้สูงสุดกี่ครั้ง",
-    Default = CFG.MAX_RESTARTS, Step = 1, Min = 0, Max = 100, Format = "%d", Callback = bind("MAX_RESTARTS") })
-sRound:AddStepper({ Title = "Max runtime", Description = "รอบเดียวนานเกินกี่วินาที = ค้าง",
-    Default = CFG.MAX_RUNTIME, Step = 30, Min = 60, Max = 3600, Format = "%ds", Callback = bind("MAX_RUNTIME") })
+sEnter:AddStepper({ Title = "Enter delay", Description = "ออกจากโซนแล้วรอกี่วินาทีก่อนเข้าใหม่",
+    Default = CFG.ENTER_DELAY, Step = 1, Min = 0, Max = 60, Format = "%ds", Callback = bind("ENTER_DELAY") })
 
-local sSafe = pControl:AddSection("Safety")
-sSafe:AddToggle({ Title = "Learn limit", Description = "ตายที่สัตว์ตัวไหน รอบหน้าเลือกไข่ที่ต่ำกว่า",
-    Default = CFG.LEARN_LIMIT, Callback = bind("LEARN_LIMIT") })
-sSafe:AddButton({ Title = "Reset limit", Description = "ล้างค่าที่จำไว้ (ใช้ตอนเปลี่ยนตัวละครที่แข็งขึ้น)",
-    ButtonText = "Reset", Callback = function()
-        getgenv().WildAutoFailNum = nil
-        log("ล้างค่า limit แล้ว")
-        Window:Notify({ Title = "ล้างค่า limit แล้ว", Duration = 2 })
+local sQuick = pMain:AddSection("Quick")
+sQuick:AddButton({ Title = "Farm everything", Description = "เปิด: เข้า Wild + เดิน + ตี + เก็บไข่",
+    ButtonText = "All on", Color = Col.Accent, Callback = function()
+        for _, k in ipairs({ "enter", "move", "attack", "claim" }) do switches[k]:Set(true) end
+    end })
+sQuick:AddButton({ Title = "Stop everything", Description = "ปิดทุกสวิตช์",
+    ButtonText = "All off", Color = Col.Red, Callback = function()
+        for _, sw in pairs(switches) do sw:Set(false) end
+        local _, hum = getRoot()
+        local root = getRoot()
+        if hum and root then hum:MoveTo(root.Position) end
     end })
 
 -- ===== Combat =====
 local sAtk = pCombat:AddSection("Attack")
-sAtk:AddToggle({ Title = "Auto attack", Description = "ตีสัตว์อัตโนมัติ",
+switches.attack = sAtk:AddToggle({ Title = "Auto attack", Description = "ตีเป้าหมายเมื่ออยู่ในระยะ",
     Default = CFG.AUTO_ATTACK, Callback = bind("AUTO_ATTACK") })
-sAtk:AddToggle({ Title = "Kill in order", Description = "ตีไล่ e1, e2, ... จนถึงตัวที่ผูกกับไข่",
+local modeDrop = sAtk:AddDropdown({ Title = "Target", Description = "Egg = สัตว์ที่ผูกกับไข่ · Nearest · Lowest · Selected",
+    Options = { "Egg", "Nearest", "Lowest", "Selected" }, Default = CFG.TARGET_MODE, Callback = bind("TARGET_MODE") })
+sAtk:AddToggle({ Title = "Kill in order", Description = "(โหมด Egg) ตีไล่ e1, e2, ... จนถึงตัวที่ผูกกับไข่",
     Default = CFG.KILL_IN_ORDER, Callback = bind("KILL_IN_ORDER") })
 sAtk:AddStepper({ Title = "Attack delay", Description = "วินาทีระหว่างการตีแต่ละครั้ง",
     Default = CFG.ATTACK_DELAY, Step = 0.05, Min = 0.05, Max = 2, Format = "%.2fs", Callback = bind("ATTACK_DELAY") })
-sAtk:AddStepper({ Title = "Attack range", Description = "เข้าใกล้แค่ไหนถึงเริ่มตี (studs)",
+sAtk:AddStepper({ Title = "Attack range", Description = "ระยะที่ถือว่าใกล้พอ (studs)",
     Default = CFG.ATTACK_RANGE, Step = 1, Min = 3, Max = 60, Format = "%d", Callback = bind("ATTACK_RANGE") })
-sAtk:AddStepper({ Title = "Stuck range", Description = "เดินชนตัวสัตว์แต่อยู่ในระยะนี้ → ตีเลย",
+sAtk:AddStepper({ Title = "Stuck range", Description = "เดินชน / ไม่ได้เปิดเดิน แต่อยู่ในระยะนี้ → ตีเลย",
     Default = CFG.STUCK_RANGE, Step = 5, Min = 10, Max = 150, Format = "%d", Callback = bind("STUCK_RANGE") })
+sAtk:AddToggle({ Title = "Auto get id", Description = "ยังไม่รู้ id รอบ → คลิกจอให้เกมตีเองหนึ่งที",
+    Default = CFG.AUTO_GET_ID, Callback = bind("AUTO_GET_ID") })
 
 local sMove = pCombat:AddSection("Movement")
-sMove:AddToggle({ Title = "Teleport", Description = "วาร์ปไปหาเป้าหมาย (เร็ว แต่เสี่ยงโดนตรวจจับ)",
+switches.move = sMove:AddToggle({ Title = "Auto move", Description = "เดินไปหาเป้าหมาย / ไข่ที่จะเก็บ",
+    Default = CFG.AUTO_MOVE, Callback = bind("AUTO_MOVE") })
+sMove:AddToggle({ Title = "Teleport", Description = "วาร์ปแทนเดิน (เร็ว แต่เสี่ยงโดนตรวจจับ)",
     Default = CFG.TELEPORT, Callback = bind("TELEPORT") })
 
-local sDbg = pCombat:AddSection("Debug")
-sDbg:AddToggle({ Title = "Attack log", Description = "แสดงผลการตีและระยะในหน้า Logs",
+local sSafe = pCombat:AddSection("Safety & debug")
+sSafe:AddToggle({ Title = "Learn limit", Description = "ตายที่สัตว์ตัวไหน → ไม่เลือกไข่ที่สูงกว่านั้น",
+    Default = CFG.LEARN_LIMIT, Callback = bind("LEARN_LIMIT") })
+sSafe:AddButton({ Title = "Reset limit", Description = "ล้างค่าที่จำไว้", ButtonText = "Reset",
+    Callback = function()
+        getgenv().WildAutoFailNum = nil
+        log("ล้างค่า limit แล้ว")
+    end })
+sSafe:AddToggle({ Title = "Attack log", Description = "แสดงผลการตีในหน้า Logs",
     Default = CFG.DEBUG_ATTACK, Callback = bind("DEBUG_ATTACK") })
 
 -- ===== Eggs =====
 local sClaim = pEggs:AddSection("Claim")
-sClaim:AddToggle({ Title = "Auto claim", Description = "เก็บไข่เป้าหมายอัตโนมัติ",
+switches.claim = sClaim:AddToggle({ Title = "Auto claim", Description = "เก็บไข่ที่ดรอปตามโหมดด้านล่าง",
     Default = CFG.AUTO_CLAIM, Callback = bind("AUTO_CLAIM") })
-sClaim:AddToggle({ Title = "Return after claim", Description = "ค่า returning ตอนเก็บไข่ (เกมใช้ค่าเปิด)",
+sClaim:AddDropdown({ Title = "Claim mode", Description = "Target = ไข่เป้าหมาย · Best = ใบดีสุด · Any = ใบไหนก็ได้",
+    Options = { "Target", "Best", "Any" }, Default = CFG.CLAIM_MODE, Callback = bind("CLAIM_MODE") })
+sClaim:AddToggle({ Title = "Return after claim", Description = "เก็บแล้วกลับฐาน (ค่าที่เกมใช้)",
     Default = CFG.RETURN_AFTER, Callback = bind("RETURN_AFTER") })
-sClaim:AddStepper({ Title = "Max egg tier", Description = "ไม่ไปเอาไข่ที่ tier สูงกว่านี้ (off = ไม่จำกัด)",
+sClaim:AddStepper({ Title = "Max egg tier", Description = "ไม่เลือกไข่ที่ tier สูงกว่านี้ (off = ไม่จำกัด)",
     Default = CFG.MAX_EGG_TIER, Step = 1, Min = 1, Max = 30, Format = "%d", AllowNil = true,
     Callback = bind("MAX_EGG_TIER") })
+sClaim:AddButton({ Title = "Claim now", Description = "เก็บไข่ที่ดรอปอยู่ตอนนี้ (ใบดีสุด)", ButtonText = "Claim",
+    Callback = function()
+        local drops = droppedEggs()
+        if #drops == 0 then log("ยังไม่มีไข่ที่ดรอป") return end
+        table.sort(drops, function(a, b) return (a.egg.hatchStars or 0) > (b.egg.hatchStars or 0) end)
+        log("เก็บไข่ " .. drops[1].egg.slot .. " ...")
+        claimEgg(drops[1].egg.slot)
+    end })
 
 local KIND_COLOR = { common = "#9d9d9d", rare = "#3b8eea", epic = "#d670d6", legendary = "#e5c07b", mythic = "#f14c4c" }
 local SHINY_COLOR = { golden = "#e5c07b", diamond = "#29b8db" }
@@ -922,30 +815,28 @@ end
 local eggListUI = pEggs:AddList({
     Header = "Eggs in zone  ·  กดเพื่อเลือกเป้าหมาย", RowHeight = 32,
     OnClick = function(id)
-        if id == "__auto" then
-            CFG.TARGET_EGG = nil
-        elseif id then
-            CFG.TARGET_EGG = (CFG.TARGET_EGG == id) and nil or id
-        end
-        log("เป้าหมายไข่: " .. tostring(CFG.TARGET_EGG or "อัตโนมัติ") .. " (มีผลรอบถัดไป)")
+        if id == "__auto" then CFG.TARGET_EGG = nil
+        elseif id then CFG.TARGET_EGG = (CFG.TARGET_EGG == id) and nil or id end
+        log("ไข่เป้าหมาย: " .. tostring(CFG.TARGET_EGG or "อัตโนมัติ"))
     end,
 })
 
 local function renderEggs()
-    local items = {}
-    table.insert(items, { Id = "__auto",
+    local items = { { Id = "__auto",
         Text = (CFG.TARGET_EGG == nil and '<font color="#0078d4">●</font> ' or '<font color="#5f5f5f">○</font> ')
-            .. '<font color="#e6e6e6">Auto</font>  <font color="#969696">เลือกไข่ดาวมากสุดเอง</font>' })
+            .. '<font color="#e6e6e6">Auto</font>  <font color="#969696">เลือกไข่ดาวมากสุดเอง</font>' } }
     local list = eggList()
     if #list == 0 then
         table.insert(items, { Text = '<font color="#5f5f5f">ยังไม่มีข้อมูลไข่ — เข้าโซน Wild ก่อน</font>' })
     end
-    local failNum = getgenv().WildAutoFailNum
+    local dropped = {}
+    for _, d in ipairs(droppedEggs()) do dropped[d.egg.slot] = true end
     for _, e in ipairs(list) do
         local tag = ""
-        if W.curEgg and W.curEgg.slot == e.slot then tag = '<font color="#23d18b">กำลังไปเอา</font>'
-        elseif W.Dead[e.enemyId] then tag = '<font color="#5f5f5f">สัตว์ตายแล้ว</font>'
-        elseif failNum and enemyNum(e.enemyId) >= failNum then tag = '<font color="#f14c4c">ยากเกิน</font>' end
+        if W.Claimed[e.slot] then tag = '<font color="#23d18b">เก็บแล้ว</font>'
+        elseif dropped[e.slot] then tag = '<font color="#23d18b">ดรอปแล้ว</font>'
+        elseif W.curEgg and W.curEgg.slot == e.slot then tag = '<font color="#e5c07b">เป้าหมาย</font>'
+        elseif not eggAllowed(e) then tag = '<font color="#f14c4c">ข้าม</font>' end
         table.insert(items, { Id = e.slot, Text = string.format(
             '%s <font color="#e6e6e6">%s</font> <font color="#969696">T%s</font> <font color="%s">%s</font> <font color="%s">%s</font> <font color="#e5c07b">%s*</font> <font color="#29b8db">%s</font> %s',
             CFG.TARGET_EGG == e.slot and '<font color="#0078d4">●</font>' or '<font color="#5f5f5f">○</font>',
@@ -959,7 +850,16 @@ end
 pEggs.OnShow = renderEggs
 
 -- ===== Units =====
-local unitListUI = pUnits:AddList({ Header = "Enemies in zone", RowHeight = 22, Clickable = false })
+local unitListUI = pUnits:AddList({
+    Header = "Enemies  ·  กดเพื่อเลือกเป้าหมาย (โหมด Selected)", RowHeight = 24,
+    OnClick = function(id)
+        CFG.TARGET_ENEMY = (CFG.TARGET_ENEMY == id) and nil or id
+        if CFG.TARGET_ENEMY then
+            modeDrop:Set("Selected")
+            log("เป้าหมายสัตว์: " .. id)
+        end
+    end,
+})
 
 local function renderUnits()
     local list = {}
@@ -977,49 +877,49 @@ local function renderUnits()
         local pct = maxHp > 0 and hp / maxHp or 1
         local hpCol = pct > 0.6 and "#23d18b" or (pct > 0.3 and "#e5c07b" or "#f14c4c")
         local cur = W.curTarget == it.id
-        table.insert(items, { Text = string.format(
-            '<font color="%s">%s</font> <font color="#e6e6e6">%s</font> <font color="#969696">%s</font> <font color="%s">%s</font> <font color="#5f5f5f">%s</font>%s',
+        local sel = CFG.TARGET_ENEMY == it.id
+        table.insert(items, { Id = it.id, Text = string.format(
+            '%s <font color="%s">%s</font> <font color="#e6e6e6">%s</font> <font color="#969696">%s</font> <font color="%s">%s</font> <font color="#5f5f5f">%s</font>%s',
+            sel and '<font color="#0078d4">●</font>' or '<font color="#5f5f5f">○</font>',
             cur and "#23d18b" or "#3b8eea", esc(pad(it.id, 5)),
             esc(pad(u.entry and u.entry.name or "?", 15)),
             esc(pad("Lv." .. tostring(u.entry and u.entry.level or "?"), 12)),
             hpCol, esc(pad(hp .. "/" .. maxHp, 16)),
             it.d == math.huge and "-" or string.format("%.0f", it.d),
-            cur and '  <font color="#23d18b">กำลังตี</font>' or "") })
+            cur and '  <font color="#23d18b">เป้าหมาย</font>' or "") })
     end
     unitListUI:SetItems(items)
 end
 pUnits.OnShow = renderUnits
 
----------------------------------------------------------------------
--- อัปเดตสถานะ
----------------------------------------------------------------------
+-- ===== สถานะ =====
 local lastLog = ""
 Log.OnPrint = function(s) lastLog = s end
 
+local function onOff(v) return v and '<font color="#23d18b">on</font>' or '<font color="#5f5f5f">off</font>' end
+
 local function updateStatus()
-    if W.active then
-        status:SetState("Running", Col.Green)
-        status:SetButton("Stop", Col.Red)
-        Window:SetHeaderStatus('<font color="#23d18b">●</font> running')
+    if W.entering then
+        status:SetState("Entering...", Col.Yellow)
+    elseif W.InWild then
+        status:SetState("In Wild", Col.Green)
     else
-        status:SetState("Idle", Col.Off)
-        status:SetButton("Run", Col.Accent)
-        Window:SetHeaderStatus('<font color="#5f5f5f">●</font> idle')
+        status:SetState("Lobby", Col.Off)
     end
+    status:SetButton(W.InWild and "In Wild" or "Enter Wild", W.InWild and Col.Off or Col.Accent)
+    Window:SetHeaderStatus(W.InWild and '<font color="#23d18b">●</font> in wild' or '<font color="#5f5f5f">●</font> lobby')
+
     local egg = W.curEgg
-    local eggTxt = egg and string.format("%s  %s%s  %s*  (%s)", egg.slot, tostring(egg.kind),
-        egg.shiny and (" " .. tostring(egg.shiny)) or "", tostring(egg.hatchStars), tostring(egg.enemyId)) or "-"
     local u = W.curTarget and W.Units[W.curTarget]
-    local hitTxt = W.curTarget and string.format("%s  HP %s", W.curTarget,
-        u and tostring(math.floor(u.health or 0)) or "?") or "-"
     status:SetInfo(string.format(
-        'target  <font color="#e6e6e6">%s</font>\nhitting <font color="#e6e6e6">%s</font>\nround %s/%s   id %s   atk %s%s\n<font color="#5f5f5f">%s</font>',
-        esc(eggTxt), esc(hitTxt),
-        tostring((W.restarts or 0) + (W.active and 1 or 0)), tostring(CFG.MAX_RESTARTS + 1),
+        'egg    <font color="#e6e6e6">%s</font>\nenemy  <font color="#e6e6e6">%s</font>\nenter %s  move %s  attack %s  claim %s   id %s  atk %d\n<font color="#5f5f5f">%s</font>',
+        esc(egg and string.format("%s  %s%s  %s*  (%s)", egg.slot, tostring(egg.kind),
+            egg.shiny and (" " .. tostring(egg.shiny)) or "", tostring(egg.hatchStars), tostring(egg.enemyId)) or "-"),
+        esc(W.curTarget and string.format("%s  %s  HP %s", W.curTarget, u and u.entry and u.entry.name or "?",
+            u and tostring(math.floor(u.health or 0)) or "?") or "-"),
+        onOff(CFG.AUTO_ENTER), onOff(CFG.AUTO_MOVE), onOff(CFG.AUTO_ATTACK), onOff(CFG.AUTO_CLAIM),
         W.runId and '<font color="#23d18b">ok</font>' or '<font color="#5f5f5f">--</font>',
-        tostring(W.attackCount or 0),
-        getgenv().WildAutoFailNum and ("   limit &lt; e" .. getgenv().WildAutoFailNum) or "",
-        esc(lastLog:sub(1, 70))))
+        W.attackCount or 0, esc(lastLog:sub(1, 70))))
 end
 
 task.spawn(function()
@@ -1037,5 +937,5 @@ end)
 
 Window.OnClose = function() W.Stop() end
 Window.OnDestroy = function() W.Stop() end
-Window:SelectPage(pControl)
-log("พร้อมแล้ว — กด Run เพื่อเริ่ม  (RightControl = ซ่อน/แสดง)")
+Window:SelectPage(pMain)
+log("พร้อมแล้ว — เปิดสวิตช์ฟังก์ชันที่ต้องการได้เลย  (RightControl = ซ่อน/แสดง)")
