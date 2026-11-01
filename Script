@@ -325,9 +325,6 @@ table.insert(W.conns, Changed.OnClientEvent:Connect(function(data)
         W.Claimed[data.eggId] = true
         log(string.format("ได้ไข่ %s%s %s ดาว", tostring(data.egg.kind),
             data.egg.shiny and (" " .. tostring(data.egg.shiny)) or "", tostring(data.egg.hatchStars)))
-        Window:Notify({ Title = "เก็บไข่แล้ว", Content = string.format("%s  %s  %s ดาว",
-            tostring(data.egg.kind), tostring(data.egg.shiny or ""), tostring(data.egg.hatchStars)),
-            Color = Col.Green })
         if W.claimReturning then
             W.claimReturning = false
             leaveZone("กลับฐาน")
