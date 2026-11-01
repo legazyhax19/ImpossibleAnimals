@@ -194,6 +194,25 @@ local prevOnCall = getgenv().WildAutoOnCall
 getgenv().WildAutoOnCall = function(a1, a2)
     local A = getgenv().WildAuto
     if A and a1 == "Ready" then A.readySent = true end
+    -- กดออกจาก Wild เองในเกม → ส่งสัญญาณให้หยุดทุกอย่าง
+    if A then
+        local name = tostring(a1):lower()
+        if name:find("leave") or name:find("exit") or name:find("quit") or name:find("return")
+            or name:find("abandon") or name:find("cancel") or name:find("^end") then
+            A.leaveRequested = name
+        end
+        -- กดเก็บไข่เองในเกมแบบกลับฐาน
+        if name == "claimegg" and type(a2) == "table" and a2.returning then
+            A.leaveRequested = name
+        end
+        -- จดชื่อคำสั่งที่ยังไม่รู้จัก (ช่วยหาคำสั่งออก/เก็บหีบ)
+        A.seenActions = A.seenActions or {}
+        local known = { attack = true, claimegg = true, create = true, ready = true, linearpreview = true }
+        if not known[name] and not A.seenActions[name] then
+            A.seenActions[name] = true
+            A.pendingLog = (A.pendingLog or "") .. " " .. tostring(a1)
+        end
+    end
     return prevOnCall(a1, a2)
 end
 
@@ -364,6 +383,16 @@ task.spawn(function()
             end
             lastPos = pos
             if W.InWild and pickerOpen() then leaveZone("ออกจากโซน") end
+        end
+        if W.leaveRequested then
+            W.leaveRequested = nil
+            leaveZone("ออกจากโซน (กดออก)")
+        end
+        if W.pendingLog then
+            log("เกมส่งคำสั่ง:" .. W.pendingLog)
+            W.pendingLog = nil
+        end
+        if root then
             if root.AssemblyLinearVelocity.Magnitude < 1.5 then
                 stillSince = stillSince or os.clock()
             else
@@ -404,6 +433,26 @@ local function attack(targetId, targetPos)
         return Request:InvokeServer("Attack", { id = W.runId, direction = dir, sequence = W.seq, targetId = targetId })
     end)
     W.attackCount += 1
+
+    -- เซิร์ฟเวอร์ไม่รับการตีติดกันหลายครั้ง = ไม่ได้อยู่ในโซนแล้ว (เช่น กดออกระหว่างตี)
+    local refused = not ok
+    if ok and type(res) == "table" and res.ok == false then
+        local why = tostring(res.reason or res.error or res.message or ""):lower()
+        refused = not why:find("cool")
+    elseif ok and res == false then
+        refused = true
+    end
+    if refused then
+        W.badAttacks = (W.badAttacks or 0) + 1
+        if W.badAttacks >= 3 then
+            W.badAttacks = 0
+            leaveZone("ออกจากโซน (เซิร์ฟเวอร์ไม่รับการตี)")
+            return false
+        end
+    else
+        W.badAttacks = 0
+    end
+
     if not ok then
         log("Attack error:", res)
     elseif CFG.DEBUG_ATTACK and (W.attackCount <= 3 or W.attackCount % 20 == 0) then
