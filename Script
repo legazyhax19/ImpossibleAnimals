@@ -32,7 +32,11 @@ local CFG = {
     MAX_EGG_TIER   = nil,    -- จำกัด tier ไข่สูงสุดที่จะไปเอา เช่น 8 (nil = ไม่จำกัด)
     TARGET_EGG     = nil,    -- บังคับเลือกไข่ เช่น "egg4" (nil = เลือกดีสุดอัตโนมัติ)
 
-    MAX_RUNTIME    = 600,    -- หยุดเองถ้าเกินกี่วินาที กันค้าง
+    MAX_RUNTIME    = 600,    -- รอบเดียวเกินกี่วินาที → ถือว่าค้าง เริ่มใหม่
+
+    AUTO_RESTART   = true,   -- ตาย / หลุดออกจากโซน → เริ่มรอบใหม่เอง
+    MAX_RESTARTS   = 10,     -- เริ่มใหม่ได้สูงสุดกี่ครั้ง
+    LEARN_LIMIT    = true,   -- ตายที่สัตว์ตัวไหน รอบหน้าเลือกไข่ที่ต่ำกว่าตัวนั้น
 }
 
 ---------------------------------------------------------------------
@@ -386,8 +390,11 @@ local function chooseEgg(list)
     if CFG.TARGET_EGG and W.Eggs[CFG.TARGET_EGG] then
         return W.Eggs[CFG.TARGET_EGG]
     end
+    local failNum = CFG.LEARN_LIMIT and getgenv().WildAutoFailNum or nil
     for _, e in ipairs(list) do
-        if not CFG.MAX_EGG_TIER or (e.tier or 0) <= CFG.MAX_EGG_TIER then
+        local okTier = not CFG.MAX_EGG_TIER or (e.tier or 0) <= CFG.MAX_EGG_TIER
+        local okFail = not failNum or enemyNum(e.enemyId) < failNum
+        if okTier and okFail then
             return e
         end
     end
@@ -407,6 +414,55 @@ local function nextEnemy(targetEnemy)
         end
     end
     return best
+end
+
+---------------------------------------------------------------------
+-- ล้างข้อมูลรอบ / ตรวจว่าตายหรือหลุดออกจากโซน
+---------------------------------------------------------------------
+local function resetRound()
+    table.clear(W.Units)
+    table.clear(W.Dead)
+    table.clear(W.Eggs)
+    table.clear(W.candidates)
+    W.runId, W.runIdGuess = nil, false
+    W.seq = 0
+    W.claimed = false
+    W.InWild = false
+    W.scanCount = 0
+    W.clickTries = 0
+    W.stillSince = nil
+    W.attackCount = 0
+    W.died, W.left = false, false
+    W.claiming = false
+    W.lastPos = nil
+end
+
+-- ตาย: ตัวละครตาย หรือได้ตัวละครใหม่
+local function watchCharacter(char)
+    local hum = char:WaitForChild("Humanoid", 10)
+    if hum then
+        table.insert(W.conns, hum.Died:Connect(function()
+            if W.fighting then
+                W.died = true
+            end
+        end))
+    end
+end
+if player.Character then task.spawn(watchCharacter, player.Character) end
+table.insert(W.conns, player.CharacterAdded:Connect(function(char)
+    if W.fighting then W.died = true end
+    task.spawn(watchCharacter, char)
+end))
+
+-- หลุดออกจากโซน: ตัวละครถูกย้ายไกลทันที (โดยที่เราไม่ได้วาร์ปเอง)
+local function checkLeft()
+    local root = getRoot()
+    if not root then return end
+    local pos = root.Position
+    if W.lastPos and not CFG.TELEPORT and (pos - W.lastPos).Magnitude > 300 then
+        W.left = true
+    end
+    W.lastPos = pos
 end
 
 ---------------------------------------------------------------------
@@ -468,13 +524,21 @@ local function autoStart()
 end
 
 ---------------------------------------------------------------------
--- STEP 2+: ลูปหลัก
+-- STEP 2+: เล่นหนึ่งรอบ → คืนค่า "claimed" / "died" / "fail" / "stopped"
 ---------------------------------------------------------------------
-task.spawn(function()
+local function runOnce(isRestart)
     local startTime = os.clock()
+    resetRound()
 
-    if CFG.AUTO_START then
-        if not autoStart() then W.Stop() return end
+    if CFG.AUTO_START or isRestart then
+        local started = false
+        for try = 1, 5 do
+            if not W.running then return "stopped" end
+            if autoStart() then started = true break end
+            log("เริ่มรอบไม่สำเร็จ ลองใหม่ใน 3 วิ (" .. try .. "/5)")
+            task.wait(3)
+        end
+        if not started then return "fail" end
     end
 
     -- รอข้อมูลโซน
@@ -486,8 +550,7 @@ task.spawn(function()
     end
     if not next(W.Eggs) then
         log("ไม่ได้รับรายการไข่ (ยังไม่ได้เข้าโซน?)")
-        W.Stop()
-        return
+        return "fail"
     end
     task.wait(1) -- เผื่อข้อมูลสัตว์มาไม่ครบ
 
@@ -496,8 +559,7 @@ task.spawn(function()
     local egg = chooseEgg(list)
     if not egg then
         log("ไม่มีไข่ที่ตรงเงื่อนไข")
-        W.Stop()
-        return
+        return "noegg"
     end
     log(string.format("เป้าหมาย: %s  %s%s  ดาว %s  (ต้องฆ่า %s, tier %s)",
         egg.slot, tostring(egg.kind), egg.shiny and (" " .. tostring(egg.shiny)) or "",
@@ -505,15 +567,34 @@ task.spawn(function()
 
     local current
     local deadAt
+    W.fighting = true
+    W.lastPos = nil
 
     while W.running do
         if os.clock() - startTime > CFG.MAX_RUNTIME then
-            log("เกินเวลา MAX_RUNTIME")
-            break
+            log("รอบนี้นานเกิน MAX_RUNTIME — ถือว่าค้าง")
+            W.fighting = false
+            return "died"
         end
         if W.claimed then
+            W.fighting = false
             task.wait(2)
-            break
+            return "claimed"
+        end
+
+        if not W.claiming then checkLeft() end
+        if (W.died or W.left) and not W.claiming then
+            W.fighting = false
+            log(W.died and "ตัวละครตาย!" or "หลุดออกจากโซน!")
+            if current and CFG.LEARN_LIMIT and not W.claimed then
+                local n = enemyNum(current)
+                local old = getgenv().WildAutoFailNum
+                if not old or n < old then
+                    getgenv().WildAutoFailNum = n
+                    log("จำไว้: สู้ " .. current .. " ไม่ไหว รอบหน้าจะเลือกไข่ที่ต่ำกว่า e" .. n)
+                end
+            end
+            return "died"
         end
 
         local root = getRoot()
@@ -617,7 +698,8 @@ task.spawn(function()
             -- สัตว์เป้าหมายตายแล้ว → ไปเก็บไข่
             if not CFG.AUTO_CLAIM then
                 log("สัตว์เป้าหมายตายแล้ว — AUTO_CLAIM ปิดอยู่ ไปเก็บเองได้เลย")
-                break
+                W.fighting = false
+                return "stopped"
             end
             deadAt = deadAt or os.clock()
             local model = findDroppedEgg(egg.enemyId)
@@ -625,6 +707,7 @@ task.spawn(function()
             if not model and os.clock() - deadAt < 5 then
                 task.wait(0.3) -- รอไข่ดรอป
             elseif approach(pos, 5) then
+                W.claiming = true -- เก็บไข่แล้วเกมจะส่งกลับฐาน ไม่ใช่การหลุด
                 claimEgg(egg.slot)
                 -- รอผลยืนยัน
                 for _ = 1, 20 do
@@ -641,7 +724,40 @@ task.spawn(function()
         end
     end
 
+    W.fighting = false
+    return "stopped"
+end
+
+---------------------------------------------------------------------
+-- ลูปนอก: ตาย/หลุด → รอแล้วเริ่มใหม่
+---------------------------------------------------------------------
+task.spawn(function()
+    local restarts = 0
+    local result = runOnce(false)
+
+    while W.running and CFG.AUTO_RESTART and (result == "died" or result == "fail")
+        and restarts < CFG.MAX_RESTARTS do
+        restarts += 1
+        log(string.format("เริ่มรอบใหม่ใน 5 วิ... (ครั้งที่ %d/%d)", restarts, CFG.MAX_RESTARTS))
+        task.wait(5)
+        -- รอให้ตัวละครเกิดใหม่
+        for _ = 1, 20 do
+            if getRoot() then break end
+            task.wait(0.5)
+        end
+        task.wait(2)
+        if not W.running then break end
+        result = runOnce(true)
+    end
+
+    if result == "claimed" then
+        log("เสร็จ! เก็บไข่แล้ว")
+    elseif result == "noegg" then
+        log("ไม่มีไข่ที่สู้ไหว — ลองเปลี่ยนตัวละครที่แข็งกว่า หรือล้างค่าที่จำไว้ด้วย getgenv().WildAutoFailNum = nil")
+    elseif restarts >= CFG.MAX_RESTARTS then
+        log("เริ่มใหม่ครบ " .. CFG.MAX_RESTARTS .. " ครั้งแล้ว หยุด")
+    end
     W.Stop()
 end)
 
-log("เริ่มทำงาน — หยุดเองเมื่อเก็บไข่เสร็จ (หรือพิมพ์ WildAuto.Stop())")
+log("เริ่มทำงาน — หยุดเองเมื่อเก็บไข่เสร็จ (ตาย/หลุด = เริ่มใหม่เอง, หยุดเอง: WildAuto.Stop())")
