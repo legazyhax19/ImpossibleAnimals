@@ -830,12 +830,39 @@ end
 
 -- ===== Main =====
 local sWild = pMain:AddSection("Auto Wild")
-sWild:AddToggle({ Title = "Auto Wild", Description = "ไม่ได้อยู่ในโซน → เข้า Wild เอง (ตาย/เก็บไข่ก็เข้าใหม่)",
+local autoWildToggle = sWild:AddToggle({ Title = "Auto Wild", Description = "ไม่ได้อยู่ในโซน → เข้า Wild เอง (ตาย/เก็บไข่ก็เข้าใหม่)",
     Default = CFG.AUTO_WILD, Callback = bind("AUTO_WILD") })
 sWild:AddDropdown({ Title = "Pick creature", Description = "เลือกตัวละครที่จะใช้",
     Options = { "Strongest", "Most stars" }, Default = CFG.PICK_MODE, Callback = bind("PICK_MODE") })
 sWild:AddStepper({ Title = "Enter delay", Description = "ออกจากโซนแล้วรอกี่วินาทีก่อนเข้าใหม่",
     Default = CFG.ENTER_DELAY, Step = 1, Min = 0, Max = 60, Format = "%ds", Callback = bind("ENTER_DELAY") })
+
+-- แก้บั๊ก: ปิด Auto Wild → รีเซ็ตตัว → รอเกิดใหม่ → เปิด Auto Wild
+local fixing = false
+local function fixBug()
+    if fixing then return end
+    fixing = true
+    local wasOn = CFG.AUTO_WILD
+    autoWildToggle:Set(false)
+    log("แก้บั๊ก: ปิด Auto Wild แล้วรีเซ็ตตัว")
+    W.InWild, W.readySent, W.entering = false, false, false
+    resetZone()
+    resetCharacter()
+    -- รอตัวละครเกิดใหม่
+    task.wait(2)
+    for _ = 1, 30 do
+        if getRoot() then break end
+        task.wait(0.5)
+    end
+    task.wait(1)
+    if wasOn then
+        autoWildToggle:Set(true)
+        log("เปิด Auto Wild ใหม่แล้ว")
+    else
+        log("รีเซ็ตเสร็จแล้ว")
+    end
+    fixing = false
+end
 
 local sZone = pMain:AddSection("Zone")
 local zoneOpts = {}
@@ -843,6 +870,12 @@ for i = 1, 30 do zoneOpts[i] = "Zone " .. i end
 sZone:AddDropdown({ Title = "Max zone", Description = "ไล่ตีไปถึงโซนไหน",
     Options = zoneOpts, Default = "Zone " .. CFG.MAX_ZONE,
     Callback = function(v) CFG.MAX_ZONE = tonumber(v:match("%d+")) or CFG.MAX_ZONE end })
+
+local sHelp = pMain:AddSection("ถ้าเจอบั๊ก")
+sHelp:AddButton({ Title = "Fix bug", Description = "ปิด Auto Wild → รีเซ็ตตัว → เปิด Auto Wild ใหม่ (ทำให้อัตโนมัติ)",
+    ButtonText = "Fix", Color = Col.Accent, Callback = function() task.spawn(fixBug) end })
+pMain:AddParagraph({ Title = "เจอบั๊กอะไรก็ตาม (วาร์ปค้าง, ไม่ยอมตี, ไม่เข้า Wild ...)",
+    Content = "1. ปิด Auto Wild\n2. รีเซ็ตตัวละคร\n3. เปิด Auto Wild ใหม่\nหรือกดปุ่ม Fix ด้านบนเพื่อทำทั้งหมดให้อัตโนมัติ" })
 
 -- ===== Combat =====
 local sAtk = pCombat:AddSection("Auto Attack")
