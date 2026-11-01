@@ -265,8 +265,8 @@ table.insert(W.conns, Changed.OnClientEvent:Connect(function(data)
     if data.reset then resetZone() end
     -- ข้อมูลเริ่มรอบ (reset/eggs) = เข้าโซนแล้ว · ข้อมูลสัตว์อย่างเดียวนับเฉพาะเมื่อออกมานานแล้ว (กันข้อมูลค้างหลังตาย)
     -- นับว่าอยู่ในโซนเฉพาะหลังกดเลือกตัว (Ready) แล้ว และหน้าเลือกตัวปิดแล้ว
-    if not W.InWild and not W.entering and not pickerOpen()
-        and ((W.readySent and (data.reset or data.eggs or data.units)) or data.reset) then
+    if not W.InWild and not W.entering and W.readySent and not pickerOpen()
+        and (data.reset or data.eggs or data.units) then
         W.InWild = true
     end
     if not W.runId and (W.scanCount or 0) < 10 then
