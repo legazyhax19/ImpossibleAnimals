@@ -1,5 +1,5 @@
--- Wild Manual — ใช้ CursorUI library
--- ทุกฟังก์ชันแยกกัน เปิด/ปิดเองได้ (เข้า Wild, เดิน, ตี, เก็บไข่ ...)
+-- Wild — ใช้ CursorUI library
+-- Auto Wild (เลือกตัวดาวมากสุด/แข็งสุด) · Auto Attack (ไล่ตามลำดับถึงโซนที่ตั้ง) · Auto Claim (กรองระดับ/สถานะไข่)
 -- ซ่อน/แสดงหน้าต่าง: RightControl
 
 local LIBRARY_URL = "https://raw.githubusercontent.com/legazyhax19/LibraryCursorUI/refs/heads/main/BETA"
@@ -65,35 +65,27 @@ end
 -- ตั้งค่า (ทุกค่าแก้ได้จาก UI)
 ---------------------------------------------------------------------
 local CFG = {
-    -- เข้า Wild
-    AUTO_ENTER     = false,  -- ไม่ได้อยู่ในโซน → เข้า Wild เอง (ตาย/เก็บไข่แล้วก็เข้าใหม่)
-    PICK           = 1,      -- ใช้ Creature ลำดับที่
-    ENTER_DELAY    = 5,      -- ออกจากโซนแล้วรอกี่วินาทีก่อนเข้าใหม่
+    -- Auto Wild
+    AUTO_WILD      = false,       -- ไม่ได้อยู่ในโซน → เข้า Wild เอง
+    PICK_MODE      = "Strongest", -- Strongest = เลเวลสูงสุด / Most stars = ดาวมากสุด
+    ENTER_DELAY    = 5,           -- ออกจากโซนแล้วรอกี่วินาทีก่อนเข้าใหม่
 
-    -- ตี
+    -- โซน
+    MAX_ZONE       = 5,           -- ไปถึงโซน (tier) ไหน
+
+    -- Auto Attack (ไล่ e1, e2, ... ตามลำดับเสมอ · เดินไปหาเองเสมอ)
     AUTO_ATTACK    = false,
-    TARGET_MODE    = "Egg",  -- Egg / Nearest / Lowest / Selected
-    KILL_IN_ORDER  = true,   -- (โหมด Egg) ตีไล่ e1, e2, ... จนถึงตัวที่ผูกกับไข่
+    TELEPORT       = false,       -- วาร์ปแทนเดิน
     ATTACK_DELAY   = 0.25,
     ATTACK_RANGE   = 12,
     STUCK_RANGE    = 40,
-    AUTO_GET_ID    = true,   -- ยังไม่รู้ id รอบ → คลิกจอให้เกมตีเองหนึ่งที
-    DEBUG_ATTACK   = false,
 
-    -- เดิน
-    AUTO_MOVE      = false,  -- เดินไปหาเป้าหมาย (สัตว์ หรือไข่ที่จะเก็บ)
-    TELEPORT       = false,
-
-    -- ไข่
+    -- Auto Claim
     AUTO_CLAIM     = false,
-    CLAIM_MODE     = "Target", -- Target = เฉพาะไข่เป้าหมาย / Best = ใบดีสุดที่ดรอป / Any = ใบไหนก็ได้
+    MIN_KIND       = "rare",      -- ต่ำกว่าระดับนี้ ...
+    SHINY          = { golden = true, diamond = true, iridescent = true, chaos = true }, -- ... และไม่มีสถานะเหล่านี้ = ไม่เก็บ
+    RESET_IF_NONE  = true,        -- เคลียร์โซนแล้วไม่มีไข่ผ่านเงื่อนไข → รีเซ็ตตัวเพื่อเริ่มรอบใหม่
     RETURN_AFTER   = true,
-    MAX_EGG_TIER   = nil,
-    TARGET_EGG     = nil,    -- เลือกจากหน้า Eggs (nil = เลือกดีสุดเอง)
-
-    -- อื่นๆ
-    TARGET_ENEMY   = nil,    -- เลือกจากหน้า Units (ใช้กับโหมด Selected)
-    LEARN_LIMIT    = true,   -- ตายที่สัตว์ตัวไหน → ไม่เลือกไข่ที่สูงกว่านั้น
 }
 
 ---------------------------------------------------------------------
@@ -124,6 +116,7 @@ end
 ---------------------------------------------------------------------
 -- ตัวช่วย
 ---------------------------------------------------------------------
+local pickCard -- ประกาศไว้ก่อน (นิยามด้านล่าง)
 local function guid() return HttpService:GenerateGUID(false):lower() end
 
 local function getRoot()
@@ -306,14 +299,6 @@ local function watchCharacter(char)
     if not hum then return end
     table.insert(W.conns, hum.Died:Connect(function()
         if W.InWild then
-            if CFG.LEARN_LIMIT and W.curTarget then
-                local n = enemyNum(W.curTarget)
-                local old = getgenv().WildAutoFailNum
-                if not old or n < old then
-                    getgenv().WildAutoFailNum = n
-                    log("จำไว้: สู้ " .. W.curTarget .. " ไม่ไหว")
-                end
-            end
             leaveZone("ตัวละครตาย ออกจากโซน")
         end
     end))
@@ -441,6 +426,51 @@ local function droppedEggs()
     return out
 end
 
+-- อ่านการ์ดตัวละคร แล้วเลือกตาม PICK_MODE
+local SUFFIX = { K = 1e3, M = 1e6, B = 1e9, T = 1e12, QA = 1e15, QI = 1e18, SX = 1e21, SP = 1e24, OC = 1e27, NO = 1e30, DC = 1e33 }
+local function parseNumber(text)
+    text = tostring(text or ""):gsub(",", "")
+    local n, suf = text:match("(%d[%d%.]*)%s*(%a*)")
+    n = tonumber(n)
+    if not n then return 0 end
+    suf = (suf or ""):upper()
+    if suf ~= "" and not SUFFIX[suf] then
+        suf = suf:sub(1, 2)
+        if not SUFFIX[suf] then suf = suf:sub(1, 1) end
+    end
+    return n * (SUFFIX[suf] or 1)
+end
+
+local function cardText(card, path)
+    local o = card
+    for part in path:gmatch("[^%.]+") do o = o and o:FindFirstChild(part) end
+    return o and o.Text or ""
+end
+
+function pickCard(creatures)
+    local best, bestInfo
+    for _, card in ipairs(creatures:GetChildren()) do
+        if card.Name:match("^Creature%d+$") and card:GetAttribute("CreatureId") then
+            local lv = cardText(card, "Content.Title.Level")
+            local info = {
+                name = cardText(card, "Content.Title.CreatureName"),
+                levelText = lv, level = parseNumber(lv),
+                stars = parseNumber(cardText(card, "Content.Stats.Content.Stars")),
+            }
+            local better = false
+            if not best then
+                better = true
+            elseif CFG.PICK_MODE == "Most stars" then
+                better = info.stars > bestInfo.stars or (info.stars == bestInfo.stars and info.level > bestInfo.level)
+            else
+                better = info.level > bestInfo.level or (info.level == bestInfo.level and info.stars > bestInfo.stars)
+            end
+            if better then best, bestInfo = card, info end
+        end
+    end
+    return best, bestInfo
+end
+
 local function enterWild()
     if W.entering then return false end
     W.entering = true
@@ -459,24 +489,23 @@ local function enterWild()
     end)
     if not creatures then log("ไม่เจอหน้าเลือกตัวละคร") return done(false) end
 
-    local card
+    -- รอการ์ดโหลด
     for _ = 1, 40 do
-        card = creatures:FindFirstChild("Creature" .. CFG.PICK)
-        if card and card:GetAttribute("CreatureId") then break end
+        local c1 = creatures:FindFirstChild("Creature1")
+        if c1 and c1:GetAttribute("CreatureId") then break end
         task.wait(0.25)
     end
-    if not card or not card:GetAttribute("CreatureId") then
-        log("ไม่เจอ Creature" .. CFG.PICK)
+    task.wait(0.5)
+    local card, info = pickCard(creatures)
+    if not card then
+        log("ไม่เจอการ์ดตัวละคร")
         return done(false)
     end
-    task.wait(0.5)
     for _, c in ipairs(creatures:GetChildren()) do
         local cid = c:GetAttribute("CreatureId")
         if cid then W.creatureIds[cid] = true end
     end
-    local nameLbl = card:FindFirstChild("Content") and card.Content:FindFirstChild("Title")
-        and card.Content.Title:FindFirstChild("CreatureName")
-    log("เลือก Creature" .. CFG.PICK .. " " .. (nameLbl and nameLbl.Text or ""))
+    log(string.format("เลือก %s  %s  %s  %d ดาว", card.Name, info.name, info.levelText, info.stars))
 
     local ok2, res2 = pcall(function()
         return Request:InvokeServer("Ready", { card:GetAttribute("CreatureId") })
@@ -499,7 +528,7 @@ local function ensureRunId(target)
         W.runId, W.runIdGuess, W.guessHp, W.guessAttacks = c.id, true, nil, 0
         return true
     end
-    if CFG.AUTO_GET_ID then
+    if CFG.AUTO_GET_ID ~= false then
         W.clickTries = (W.clickTries or 0) + 1
         if W.clickTries <= 10 then
             if W.clickTries == 1 then log("ยังไม่รู้ id ของรอบ — คลิกจอให้เกมตีหนึ่งที") end
@@ -519,81 +548,83 @@ local function ensureRunId(target)
 end
 
 ---------------------------------------------------------------------
--- เลือกไข่ / เลือกสัตว์
+-- เลือกเป้าหมาย / กรองไข่
 ---------------------------------------------------------------------
+local KINDS = { "common", "rare", "epic", "legendary", "mythic" }
+local KIND_RANK = {}
+for i, k in ipairs(KINDS) do KIND_RANK[k] = i end
+
+local function unitTier(id, u)
+    if u and tonumber(u.tier) then return tonumber(u.tier) end
+    -- ไม่มี tier ในข้อมูล → ดูจากไข่ที่ผูกกับสัตว์ตัวนี้
+    for _, e in pairs(W.Eggs) do
+        if e.enemyId == id and e.tier then return e.tier end
+    end
+    return math.huge
+end
+
+-- สัตว์ตัวถัดไป: เลขน้อยสุดที่ยังไม่ตาย และอยู่ในโซนที่ตั้งไว้
+local function getTarget()
+    local best, bn
+    for id, u in pairs(W.Units) do
+        if isAlive(id) and unitTier(id, u) <= CFG.MAX_ZONE then
+            local n = enemyNum(id)
+            if not bn or n < bn then best, bn = id, n end
+        end
+    end
+    return best
+end
+
+-- ไข่ผ่านเงื่อนไขไหม (ระดับถึง หรือ มีสถานะที่เลือก)
+local function eggPasses(e)
+    local rank = KIND_RANK[tostring(e.kind)] or 0
+    if rank >= (KIND_RANK[CFG.MIN_KIND] or 1) then return true end
+    if e.shiny and CFG.SHINY[tostring(e.shiny):lower()] then return true end
+    return false
+end
+
+local function eggInZone(e) return (e.tier or math.huge) <= CFG.MAX_ZONE end
+
+local function betterEgg(a, b)
+    local sa, sb = a.hatchStars or 0, b.hatchStars or 0
+    if sa ~= sb then return sa > sb end
+    local ra, rb = KIND_RANK[tostring(a.kind)] or 0, KIND_RANK[tostring(b.kind)] or 0
+    if ra ~= rb then return ra > rb end
+    return (a.shiny and 1 or 0) > (b.shiny and 1 or 0)
+end
+
 local function eggList()
     local list = {}
     for _, e in pairs(W.Eggs) do table.insert(list, e) end
-    table.sort(list, function(a, b)
-        local sa, sb = a.hatchStars or 0, b.hatchStars or 0
-        if sa ~= sb then return sa > sb end
-        local ha, hb = a.shiny and 1 or 0, b.shiny and 1 or 0
-        if ha ~= hb then return ha > hb end
-        return (a.tier or 0) < (b.tier or 0)
-    end)
+    table.sort(list, function(a, b) return (a.tier or 0) < (b.tier or 0) end)
     return list
 end
 
-local function eggAllowed(e)
-    if W.Claimed[e.slot] then return false end
-    if CFG.MAX_EGG_TIER and (e.tier or 0) > CFG.MAX_EGG_TIER then return false end
-    local fail = CFG.LEARN_LIMIT and getgenv().WildAutoFailNum
-    if fail and enemyNum(e.enemyId) >= fail then return false end
-    return true
+-- ไข่ที่ดีที่สุดที่ผ่านเงื่อนไขในโซน (แผนว่าจะเก็บใบไหน)
+local function plannedEgg()
+    local best
+    for _, e in pairs(W.Eggs) do
+        if eggInZone(e) and eggPasses(e) and not W.Claimed[e.slot] then
+            if not best or betterEgg(e, best) then best = e end
+        end
+    end
+    return best
 end
 
-local function targetEgg()
-    if CFG.TARGET_EGG then
-        local e = W.Eggs[CFG.TARGET_EGG]
-        if e and not W.Claimed[e.slot] then return e end
-    end
-    for _, e in ipairs(eggList()) do
-        if eggAllowed(e) then return e end
-    end
-end
-
-local function getTarget()
-    local mode = CFG.TARGET_MODE
-    if mode == "Selected" then
-        return isAlive(CFG.TARGET_ENEMY) and CFG.TARGET_ENEMY or nil
-    elseif mode == "Nearest" then
-        local best, bd
-        for id, u in pairs(W.Units) do
-            if isAlive(id) then
-                local d = distTo(u.position)
-                if not bd or d < bd then best, bd = id, d end
-            end
-        end
-        return best
-    elseif mode == "Lowest" then
-        local best, bn
-        for id in pairs(W.Units) do
-            if isAlive(id) and (not bn or enemyNum(id) < bn) then best, bn = id, enemyNum(id) end
-        end
-        return best
-    else -- Egg
-        local egg = targetEgg()
-        W.curEgg = egg
-        if not egg then return nil end
-        if not CFG.KILL_IN_ORDER then
-            return isAlive(egg.enemyId) and egg.enemyId or nil
-        end
-        local limit, best, bn = enemyNum(egg.enemyId), nil, nil
-        for id in pairs(W.Units) do
-            local n = enemyNum(id)
-            if n <= limit and isAlive(id) and (not bn or n < bn) then best, bn = id, n end
-        end
-        return best
-    end
+local function resetCharacter()
+    local char = player.Character
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    if hum then hum.Health = 0 end
+    if char then pcall(function() char:BreakJoints() end) end
 end
 
 ---------------------------------------------------------------------
--- ลูปของแต่ละฟังก์ชัน (ทำงานเฉพาะตอนเปิดสวิตช์)
+-- ลูป
 ---------------------------------------------------------------------
--- เข้า Wild เอง
+-- Auto Wild
 task.spawn(function()
     while W.running do
-        if CFG.AUTO_ENTER and not W.InWild and not W.entering
+        if CFG.AUTO_WILD and not W.InWild and not W.entering
             and os.clock() - W.leftAt >= CFG.ENTER_DELAY and getRoot() then
             if not enterWild() then task.wait(3) end
         end
@@ -601,16 +632,17 @@ task.spawn(function()
     end
 end)
 
--- เลือกเป้าหมาย + ตี
+-- Auto Attack
 task.spawn(function()
     local lastTarget
     while W.running do
         if W.InWild then
             local target = getTarget()
             W.curTarget = target
-            if target ~= lastTarget and target and CFG.AUTO_ATTACK then
+            W.curEgg = plannedEgg()
+            if CFG.AUTO_ATTACK and target and target ~= lastTarget then
                 local u = W.Units[target]
-                log(string.format("เป้าหมาย: %s (%s Lv.%s)", target, u and u.entry and u.entry.name or "?",
+                log(string.format("ไปตี %s (%s Lv.%s)", target, u and u.entry and u.entry.name or "?",
                     tostring(u and u.entry and u.entry.level or "?")))
             end
             lastTarget = target
@@ -618,14 +650,13 @@ task.spawn(function()
             if CFG.AUTO_ATTACK and target and not W.claimGoal then
                 local u = W.Units[target]
                 local d = u and distTo(u.position) or math.huge
-                local inRange = d <= CFG.ATTACK_RANGE or ((W.stuck or not CFG.AUTO_MOVE) and d <= CFG.STUCK_RANGE)
-                if inRange then
+                if d <= CFG.ATTACK_RANGE or (W.stuck and d <= CFG.STUCK_RANGE) then
                     if ensureRunId(target) then
                         attack(target, u.position)
                         if W.runIdGuess then
                             local hp = u.health or 0
                             W.guessHp = W.guessHp or hp
-                            W.guessAttacks += 1
+                            W.guessAttacks = (W.guessAttacks or 0) + 1
                             if hp < W.guessHp or not isAlive(target) then
                                 W.runIdGuess = false
                                 log("ได้ id ของรอบแล้ว (เดาถูก)")
@@ -642,19 +673,19 @@ task.spawn(function()
                 task.wait(0.25)
             end
         else
-            W.curTarget = nil
+            W.curTarget, lastTarget = nil, nil
             task.wait(0.5)
         end
     end
 end)
 
--- เดิน
+-- เดิน (เปิดตลอด: ไปที่ไข่ที่จะเก็บก่อน ไม่งั้นไปหาสัตว์ที่จะตี)
 task.spawn(function()
     while W.running do
-        if CFG.AUTO_MOVE and W.InWild then
+        if W.InWild then
             if W.claimGoal then
                 approach(W.claimGoal, 5)
-            elseif W.curTarget and W.Units[W.curTarget] then
+            elseif CFG.AUTO_ATTACK and W.curTarget and W.Units[W.curTarget] then
                 approach(W.Units[W.curTarget].position, CFG.ATTACK_RANGE)
             end
         end
@@ -662,51 +693,54 @@ task.spawn(function()
     end
 end)
 
--- เก็บไข่
-local function pickClaimable()
-    local drops = droppedEggs()
-    if #drops == 0 then return nil end
-    if CFG.CLAIM_MODE == "Target" then
-        local te = targetEgg()
-        for _, d in ipairs(drops) do
-            if te and d.egg.slot == te.slot then return d end
-        end
-        return nil
-    end
-    table.sort(drops, function(a, b)
-        local sa, sb = a.egg.hatchStars or 0, b.egg.hatchStars or 0
-        if sa ~= sb then return sa > sb end
-        return (a.egg.shiny and 1 or 0) > (b.egg.shiny and 1 or 0)
-    end)
-    if CFG.CLAIM_MODE == "Best" then
-        -- เก็บเฉพาะเมื่อใบที่ดรอปดีที่สุดในบรรดาไข่ที่เหลือทั้งหมด
-        local te = targetEgg()
-        if te and (drops[1].egg.hatchStars or 0) < (te.hatchStars or 0) then return nil end
-    end
-    return drops[1]
-end
-
+-- Auto Claim: เคลียร์โซนเสร็จ → เก็บไข่ใบดีสุดที่ผ่านเงื่อนไข
 task.spawn(function()
+    local noneLogged = false
     while W.running do
-        if CFG.AUTO_CLAIM and W.InWild then
-            local d = pickClaimable()
-            if d then
-                local pos = d.model:GetPivot().Position
+        if CFG.AUTO_CLAIM and W.InWild and not getTarget() and next(W.Eggs) then
+            -- หาไข่ที่ดรอปแล้วและผ่านเงื่อนไข
+            local best
+            for _, d in ipairs(droppedEggs()) do
+                if eggInZone(d.egg) and eggPasses(d.egg) then
+                    if not best or betterEgg(d.egg, best.egg) then best = d end
+                end
+            end
+
+            if best then
+                noneLogged = false
+                local pos = best.model:GetPivot().Position
                 W.claimGoal = pos
-                if distTo(pos) <= 6 or not CFG.AUTO_MOVE then
-                    log("เก็บไข่ " .. d.egg.slot .. " ...")
-                    claimEgg(d.egg.slot)
+                if distTo(pos) <= 6 then
+                    log(string.format("เก็บไข่ %s  %s%s  %s ดาว", best.egg.slot, tostring(best.egg.kind),
+                        best.egg.shiny and (" " .. tostring(best.egg.shiny)) or "", tostring(best.egg.hatchStars)))
+                    claimEgg(best.egg.slot)
                     for _ = 1, 20 do
-                        if W.Claimed[d.egg.slot] then break end
+                        if W.Claimed[best.egg.slot] then break end
                         task.wait(0.25)
                     end
                     W.claimGoal = nil
                 end
             else
                 W.claimGoal = nil
+                -- รอไข่ดรอปสักพักก่อนตัดสิน
+                W.clearedAt = W.clearedAt or os.clock()
+                if os.clock() - W.clearedAt > 4 then
+                    if not noneLogged then
+                        noneLogged = true
+                        log("เคลียร์ถึงโซน " .. CFG.MAX_ZONE .. " แล้ว ไม่มีไข่ผ่านเงื่อนไข")
+                    end
+                    if CFG.RESET_IF_NONE then
+                        log("รีเซ็ตตัวเพื่อเริ่มรอบใหม่")
+                        W.clearedAt = nil
+                        resetCharacter()
+                        task.wait(3)
+                    end
+                end
             end
         else
             W.claimGoal = nil
+            if getTarget() then W.clearedAt = nil end
+            if not W.InWild then noneLogged = false end
         end
         task.wait(0.3)
     end
@@ -716,7 +750,13 @@ end)
 -- UI
 ---------------------------------------------------------------------
 local function bind(key) return function(v) CFG[key] = v end end
-local switches = {}
+
+local KIND_COLOR = { common = "#9d9d9d", rare = "#3b8eea", epic = "#d670d6", legendary = "#e5c07b", mythic = "#f14c4c" }
+local SHINY_COLOR = { golden = "#e5c07b", diamond = "#29b8db", iridescent = "#d670d6", chaos = "#f14c4c" }
+local function pad(s, n)
+    s = tostring(s)
+    return #s >= n and s or (s .. string.rep(" ", n - #s))
+end
 
 -- ===== Main =====
 local status = pMain:AddStatusCard({
@@ -724,125 +764,77 @@ local status = pMain:AddStatusCard({
     Callback = function()
         if W.InWild then
             Window:Notify({ Title = "อยู่ในโซนแล้ว", Duration = 2 })
-        else
+        elseif not W.entering then
             task.spawn(enterWild)
         end
     end,
 })
 
-local sEnter = pMain:AddSection("Enter Wild")
-switches.enter = sEnter:AddToggle({ Title = "Auto enter", Description = "ไม่ได้อยู่ในโซน → เข้า Wild เอง (ตาย/เก็บไข่ก็เข้าใหม่)",
-    Default = CFG.AUTO_ENTER, Callback = bind("AUTO_ENTER") })
-sEnter:AddStepper({ Title = "Creature", Description = "ใช้ตัวละครลำดับที่ (1 = ตัวดีสุดตามเกม)",
-    Default = CFG.PICK, Step = 1, Min = 1, Max = 30, Format = "#%d", Callback = bind("PICK") })
-sEnter:AddStepper({ Title = "Enter delay", Description = "ออกจากโซนแล้วรอกี่วินาทีก่อนเข้าใหม่",
+local sWild = pMain:AddSection("Auto Wild")
+sWild:AddToggle({ Title = "Auto Wild", Description = "ไม่ได้อยู่ในโซน → เข้า Wild เอง (ตาย/เก็บไข่ก็เข้าใหม่)",
+    Default = CFG.AUTO_WILD, Callback = bind("AUTO_WILD") })
+sWild:AddDropdown({ Title = "Pick creature", Description = "เลือกตัวละครที่จะใช้",
+    Options = { "Strongest", "Most stars" }, Default = CFG.PICK_MODE, Callback = bind("PICK_MODE") })
+sWild:AddStepper({ Title = "Enter delay", Description = "ออกจากโซนแล้วรอกี่วินาทีก่อนเข้าใหม่",
     Default = CFG.ENTER_DELAY, Step = 1, Min = 0, Max = 60, Format = "%ds", Callback = bind("ENTER_DELAY") })
 
-local sQuick = pMain:AddSection("Quick")
-sQuick:AddButton({ Title = "Farm everything", Description = "เปิด: เข้า Wild + เดิน + ตี + เก็บไข่",
-    ButtonText = "All on", Color = Col.Accent, Callback = function()
-        for _, k in ipairs({ "enter", "move", "attack", "claim" }) do switches[k]:Set(true) end
-    end })
-sQuick:AddButton({ Title = "Stop everything", Description = "ปิดทุกสวิตช์",
-    ButtonText = "All off", Color = Col.Red, Callback = function()
-        for _, sw in pairs(switches) do sw:Set(false) end
-        local _, hum = getRoot()
-        local root = getRoot()
-        if hum and root then hum:MoveTo(root.Position) end
-    end })
+local sZone = pMain:AddSection("Zone")
+sZone:AddStepper({ Title = "Max zone", Description = "ไล่ตีไปถึงโซน (tier) ไหน",
+    Default = CFG.MAX_ZONE, Step = 1, Min = 1, Max = 30, Format = "zone %d", Callback = bind("MAX_ZONE") })
 
 -- ===== Combat =====
-local sAtk = pCombat:AddSection("Attack")
-switches.attack = sAtk:AddToggle({ Title = "Auto attack", Description = "ตีเป้าหมายเมื่ออยู่ในระยะ",
+local sAtk = pCombat:AddSection("Auto Attack")
+sAtk:AddToggle({ Title = "Auto Attack", Description = "ไล่ตี e1, e2, ... ตามลำดับ จนถึงโซนที่ตั้ง (เดินไปเอง)",
     Default = CFG.AUTO_ATTACK, Callback = bind("AUTO_ATTACK") })
-local modeDrop = sAtk:AddDropdown({ Title = "Target", Description = "Egg = สัตว์ที่ผูกกับไข่ · Nearest · Lowest · Selected",
-    Options = { "Egg", "Nearest", "Lowest", "Selected" }, Default = CFG.TARGET_MODE, Callback = bind("TARGET_MODE") })
-sAtk:AddToggle({ Title = "Kill in order", Description = "(โหมด Egg) ตีไล่ e1, e2, ... จนถึงตัวที่ผูกกับไข่",
-    Default = CFG.KILL_IN_ORDER, Callback = bind("KILL_IN_ORDER") })
+sAtk:AddToggle({ Title = "Teleport", Description = "วาร์ปแทนเดิน (เร็ว แต่เสี่ยงโดนตรวจจับ)",
+    Default = CFG.TELEPORT, Callback = bind("TELEPORT") })
 sAtk:AddStepper({ Title = "Attack delay", Description = "วินาทีระหว่างการตีแต่ละครั้ง",
     Default = CFG.ATTACK_DELAY, Step = 0.05, Min = 0.05, Max = 2, Format = "%.2fs", Callback = bind("ATTACK_DELAY") })
 sAtk:AddStepper({ Title = "Attack range", Description = "ระยะที่ถือว่าใกล้พอ (studs)",
     Default = CFG.ATTACK_RANGE, Step = 1, Min = 3, Max = 60, Format = "%d", Callback = bind("ATTACK_RANGE") })
-sAtk:AddStepper({ Title = "Stuck range", Description = "เดินชน / ไม่ได้เปิดเดิน แต่อยู่ในระยะนี้ → ตีเลย",
+sAtk:AddStepper({ Title = "Stuck range", Description = "เดินชนตัวสัตว์แต่อยู่ในระยะนี้ → ตีเลย",
     Default = CFG.STUCK_RANGE, Step = 5, Min = 10, Max = 150, Format = "%d", Callback = bind("STUCK_RANGE") })
-sAtk:AddToggle({ Title = "Auto get id", Description = "ยังไม่รู้ id รอบ → คลิกจอให้เกมตีเองหนึ่งที",
-    Default = CFG.AUTO_GET_ID, Callback = bind("AUTO_GET_ID") })
-
-local sMove = pCombat:AddSection("Movement")
-switches.move = sMove:AddToggle({ Title = "Auto move", Description = "เดินไปหาเป้าหมาย / ไข่ที่จะเก็บ",
-    Default = CFG.AUTO_MOVE, Callback = bind("AUTO_MOVE") })
-sMove:AddToggle({ Title = "Teleport", Description = "วาร์ปแทนเดิน (เร็ว แต่เสี่ยงโดนตรวจจับ)",
-    Default = CFG.TELEPORT, Callback = bind("TELEPORT") })
-
-local sSafe = pCombat:AddSection("Safety & debug")
-sSafe:AddToggle({ Title = "Learn limit", Description = "ตายที่สัตว์ตัวไหน → ไม่เลือกไข่ที่สูงกว่านั้น",
-    Default = CFG.LEARN_LIMIT, Callback = bind("LEARN_LIMIT") })
-sSafe:AddButton({ Title = "Reset limit", Description = "ล้างค่าที่จำไว้", ButtonText = "Reset",
-    Callback = function()
-        getgenv().WildAutoFailNum = nil
-        log("ล้างค่า limit แล้ว")
-    end })
-sSafe:AddToggle({ Title = "Attack log", Description = "แสดงผลการตีในหน้า Logs",
-    Default = CFG.DEBUG_ATTACK, Callback = bind("DEBUG_ATTACK") })
 
 -- ===== Eggs =====
-local sClaim = pEggs:AddSection("Claim")
-switches.claim = sClaim:AddToggle({ Title = "Auto claim", Description = "เก็บไข่ที่ดรอปตามโหมดด้านล่าง",
+local sClaim = pEggs:AddSection("Auto Claim")
+sClaim:AddToggle({ Title = "Auto Claim", Description = "เคลียร์โซนแล้วเก็บไข่ใบดีสุดที่ผ่านเงื่อนไข",
     Default = CFG.AUTO_CLAIM, Callback = bind("AUTO_CLAIM") })
-sClaim:AddDropdown({ Title = "Claim mode", Description = "Target = ไข่เป้าหมาย · Best = ใบดีสุด · Any = ใบไหนก็ได้",
-    Options = { "Target", "Best", "Any" }, Default = CFG.CLAIM_MODE, Callback = bind("CLAIM_MODE") })
-sClaim:AddToggle({ Title = "Return after claim", Description = "เก็บแล้วกลับฐาน (ค่าที่เกมใช้)",
-    Default = CFG.RETURN_AFTER, Callback = bind("RETURN_AFTER") })
-sClaim:AddStepper({ Title = "Max egg tier", Description = "ไม่เลือกไข่ที่ tier สูงกว่านี้ (off = ไม่จำกัด)",
-    Default = CFG.MAX_EGG_TIER, Step = 1, Min = 1, Max = 30, Format = "%d", AllowNil = true,
-    Callback = bind("MAX_EGG_TIER") })
-sClaim:AddButton({ Title = "Claim now", Description = "เก็บไข่ที่ดรอปอยู่ตอนนี้ (ใบดีสุด)", ButtonText = "Claim",
-    Callback = function()
-        local drops = droppedEggs()
-        if #drops == 0 then log("ยังไม่มีไข่ที่ดรอป") return end
-        table.sort(drops, function(a, b) return (a.egg.hatchStars or 0) > (b.egg.hatchStars or 0) end)
-        log("เก็บไข่ " .. drops[1].egg.slot .. " ...")
-        claimEgg(drops[1].egg.slot)
-    end })
+sClaim:AddDropdown({ Title = "Minimum kind", Description = "ต่ำกว่าระดับนี้ไม่เก็บ (ยกเว้นมีสถานะที่เลือกด้านล่าง)",
+    Options = KINDS, Default = CFG.MIN_KIND, Callback = bind("MIN_KIND") })
+sClaim:AddToggle({ Title = "Reset if no egg", Description = "เคลียร์โซนแล้วไม่มีไข่ผ่าน → รีเซ็ตตัวเริ่มรอบใหม่",
+    Default = CFG.RESET_IF_NONE, Callback = bind("RESET_IF_NONE") })
 
-local KIND_COLOR = { common = "#9d9d9d", rare = "#3b8eea", epic = "#d670d6", legendary = "#e5c07b", mythic = "#f14c4c" }
-local SHINY_COLOR = { golden = "#e5c07b", diamond = "#29b8db" }
-local function pad(s, n)
-    s = tostring(s)
-    return #s >= n and s or (s .. string.rep(" ", n - #s))
+local sShiny = pEggs:AddSection("เก็บเสมอถ้ามีสถานะ")
+for _, name in ipairs({ "golden", "diamond", "iridescent", "chaos" }) do
+    sShiny:AddToggle({ Title = name:sub(1, 1):upper() .. name:sub(2),
+        Default = CFG.SHINY[name], Callback = function(v) CFG.SHINY[name] = v end })
 end
 
-local eggListUI = pEggs:AddList({
-    Header = "Eggs in zone  ·  กดเพื่อเลือกเป้าหมาย", RowHeight = 32,
-    OnClick = function(id)
-        if id == "__auto" then CFG.TARGET_EGG = nil
-        elseif id then CFG.TARGET_EGG = (CFG.TARGET_EGG == id) and nil or id end
-        log("ไข่เป้าหมาย: " .. tostring(CFG.TARGET_EGG or "อัตโนมัติ"))
-    end,
-})
+local eggListUI = pEggs:AddList({ Header = "Eggs in zone", RowHeight = 30, Clickable = false })
 
 local function renderEggs()
-    local items = { { Id = "__auto",
-        Text = (CFG.TARGET_EGG == nil and '<font color="#0078d4">●</font> ' or '<font color="#5f5f5f">○</font> ')
-            .. '<font color="#e6e6e6">Auto</font>  <font color="#969696">เลือกไข่ดาวมากสุดเอง</font>' } }
+    local items = {}
     local list = eggList()
     if #list == 0 then
         table.insert(items, { Text = '<font color="#5f5f5f">ยังไม่มีข้อมูลไข่ — เข้าโซน Wild ก่อน</font>' })
     end
     local dropped = {}
     for _, d in ipairs(droppedEggs()) do dropped[d.egg.slot] = true end
+    local plan = W.curEgg
     for _, e in ipairs(list) do
-        local tag = ""
+        local tag
         if W.Claimed[e.slot] then tag = '<font color="#23d18b">เก็บแล้ว</font>'
-        elseif dropped[e.slot] then tag = '<font color="#23d18b">ดรอปแล้ว</font>'
-        elseif W.curEgg and W.curEgg.slot == e.slot then tag = '<font color="#e5c07b">เป้าหมาย</font>'
-        elseif not eggAllowed(e) then tag = '<font color="#f14c4c">ข้าม</font>' end
-        table.insert(items, { Id = e.slot, Text = string.format(
-            '%s <font color="#e6e6e6">%s</font> <font color="#969696">T%s</font> <font color="%s">%s</font> <font color="%s">%s</font> <font color="#e5c07b">%s*</font> <font color="#29b8db">%s</font> %s',
-            CFG.TARGET_EGG == e.slot and '<font color="#0078d4">●</font>' or '<font color="#5f5f5f">○</font>',
-            esc(pad(e.slot, 6)), esc(pad(e.tier, 3)),
+        elseif not eggInZone(e) then tag = '<font color="#5f5f5f">เกินโซน</font>'
+        elseif not eggPasses(e) then tag = '<font color="#5f5f5f">ไม่ผ่าน</font>'
+        elseif plan and plan.slot == e.slot then tag = '<font color="#23d18b">จะเก็บใบนี้</font>'
+        elseif dropped[e.slot] then tag = '<font color="#e5c07b">ดรอปแล้ว</font>'
+        else tag = '<font color="#969696">ผ่าน</font>' end
+        local shiny = e.shiny and tostring(e.shiny):lower()
+        table.insert(items, { Text = string.format(
+            '<font color="#969696">Z%s</font> <font color="#e6e6e6">%s</font> <font color="%s">%s</font> <font color="%s">%s</font> <font color="#e5c07b">%s*</font> <font color="#29b8db">%s</font> %s',
+            esc(pad(e.tier, 3)), esc(pad(e.slot, 6)),
             KIND_COLOR[tostring(e.kind)] or "#cccccc", esc(pad(e.kind, 10)),
-            e.shiny and (SHINY_COLOR[tostring(e.shiny)] or "#e5c07b") or "#5f5f5f", esc(pad(e.shiny or "-", 8)),
+            shiny and (SHINY_COLOR[shiny] or "#e5c07b") or "#5f5f5f", esc(pad(e.shiny or "-", 11)),
             esc(pad(e.hatchStars, 3)), esc(pad(e.enemyId, 5)), tag) })
     end
     eggListUI:SetItems(items)
@@ -850,16 +842,7 @@ end
 pEggs.OnShow = renderEggs
 
 -- ===== Units =====
-local unitListUI = pUnits:AddList({
-    Header = "Enemies  ·  กดเพื่อเลือกเป้าหมาย (โหมด Selected)", RowHeight = 24,
-    OnClick = function(id)
-        CFG.TARGET_ENEMY = (CFG.TARGET_ENEMY == id) and nil or id
-        if CFG.TARGET_ENEMY then
-            modeDrop:Set("Selected")
-            log("เป้าหมายสัตว์: " .. id)
-        end
-    end,
-})
+local unitListUI = pUnits:AddList({ Header = "Enemies in zone", RowHeight = 22, Clickable = false })
 
 local function renderUnits()
     local list = {}
@@ -877,16 +860,16 @@ local function renderUnits()
         local pct = maxHp > 0 and hp / maxHp or 1
         local hpCol = pct > 0.6 and "#23d18b" or (pct > 0.3 and "#e5c07b" or "#f14c4c")
         local cur = W.curTarget == it.id
-        local sel = CFG.TARGET_ENEMY == it.id
-        table.insert(items, { Id = it.id, Text = string.format(
-            '%s <font color="%s">%s</font> <font color="#e6e6e6">%s</font> <font color="#969696">%s</font> <font color="%s">%s</font> <font color="#5f5f5f">%s</font>%s',
-            sel and '<font color="#0078d4">●</font>' or '<font color="#5f5f5f">○</font>',
-            cur and "#23d18b" or "#3b8eea", esc(pad(it.id, 5)),
-            esc(pad(u.entry and u.entry.name or "?", 15)),
+        local inZone = unitTier(it.id, u) <= CFG.MAX_ZONE
+        table.insert(items, { Text = string.format(
+            '<font color="%s">%s</font> <font color="#969696">Z%s</font> <font color="%s">%s</font> <font color="#969696">%s</font> <font color="%s">%s</font> <font color="#5f5f5f">%s</font>%s',
+            cur and "#23d18b" or (inZone and "#3b8eea" or "#5f5f5f"), esc(pad(it.id, 5)),
+            esc(pad(u.tier or "?", 3)),
+            inZone and "#e6e6e6" or "#5f5f5f", esc(pad(u.entry and u.entry.name or "?", 15)),
             esc(pad("Lv." .. tostring(u.entry and u.entry.level or "?"), 12)),
             hpCol, esc(pad(hp .. "/" .. maxHp, 16)),
             it.d == math.huge and "-" or string.format("%.0f", it.d),
-            cur and '  <font color="#23d18b">เป้าหมาย</font>' or "") })
+            cur and '  <font color="#23d18b">กำลังตี</font>' or "") })
     end
     unitListUI:SetItems(items)
 end
@@ -895,31 +878,26 @@ pUnits.OnShow = renderUnits
 -- ===== สถานะ =====
 local lastLog = ""
 Log.OnPrint = function(s) lastLog = s end
-
 local function onOff(v) return v and '<font color="#23d18b">on</font>' or '<font color="#5f5f5f">off</font>' end
 
 local function updateStatus()
-    if W.entering then
-        status:SetState("Entering...", Col.Yellow)
-    elseif W.InWild then
-        status:SetState("In Wild", Col.Green)
-    else
-        status:SetState("Lobby", Col.Off)
-    end
+    if W.entering then status:SetState("Entering...", Col.Yellow)
+    elseif W.InWild then status:SetState("In Wild", Col.Green)
+    else status:SetState("Lobby", Col.Off) end
     status:SetButton(W.InWild and "In Wild" or "Enter Wild", W.InWild and Col.Off or Col.Accent)
     Window:SetHeaderStatus(W.InWild and '<font color="#23d18b">●</font> in wild' or '<font color="#5f5f5f">●</font> lobby')
 
     local egg = W.curEgg
     local u = W.curTarget and W.Units[W.curTarget]
     status:SetInfo(string.format(
-        'egg    <font color="#e6e6e6">%s</font>\nenemy  <font color="#e6e6e6">%s</font>\nenter %s  move %s  attack %s  claim %s   id %s  atk %d\n<font color="#5f5f5f">%s</font>',
+        'egg    <font color="#e6e6e6">%s</font>\nenemy  <font color="#e6e6e6">%s</font>\nwild %s  attack %s  claim %s  tp %s   zone %d   id %s\n<font color="#5f5f5f">%s</font>',
         esc(egg and string.format("%s  %s%s  %s*  (%s)", egg.slot, tostring(egg.kind),
             egg.shiny and (" " .. tostring(egg.shiny)) or "", tostring(egg.hatchStars), tostring(egg.enemyId)) or "-"),
         esc(W.curTarget and string.format("%s  %s  HP %s", W.curTarget, u and u.entry and u.entry.name or "?",
-            u and tostring(math.floor(u.health or 0)) or "?") or "-"),
-        onOff(CFG.AUTO_ENTER), onOff(CFG.AUTO_MOVE), onOff(CFG.AUTO_ATTACK), onOff(CFG.AUTO_CLAIM),
-        W.runId and '<font color="#23d18b">ok</font>' or '<font color="#5f5f5f">--</font>',
-        W.attackCount or 0, esc(lastLog:sub(1, 70))))
+            u and tostring(math.floor(u.health or 0)) or "?") or (W.InWild and "เคลียร์แล้ว" or "-")),
+        onOff(CFG.AUTO_WILD), onOff(CFG.AUTO_ATTACK), onOff(CFG.AUTO_CLAIM), onOff(CFG.TELEPORT),
+        CFG.MAX_ZONE, W.runId and '<font color="#23d18b">ok</font>' or '<font color="#5f5f5f">--</font>',
+        esc(lastLog:sub(1, 70))))
 end
 
 task.spawn(function()
@@ -938,4 +916,4 @@ end)
 Window.OnClose = function() W.Stop() end
 Window.OnDestroy = function() W.Stop() end
 Window:SelectPage(pMain)
-log("พร้อมแล้ว — เปิดสวิตช์ฟังก์ชันที่ต้องการได้เลย  (RightControl = ซ่อน/แสดง)")
+log("พร้อมแล้ว — เปิดสวิตช์ที่ต้องการได้เลย  (RightControl = ซ่อน/แสดง)")
