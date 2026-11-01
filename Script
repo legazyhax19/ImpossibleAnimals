@@ -1,5 +1,5 @@
--- Wild Terminal: หน้าต่างแบบ Terminal (สไตล์ Cursor / VS Code) ควบคุม Wild Auto
--- รันไฟล์นี้ไฟล์เดียว → กด Run หรือพิมพ์ start
+-- Wild Auto (Cursor style UI): หน้าต่างตั้งค่าแบบแอป Cursor — ปุ่มเปิด/ปิดตามฟังก์ชัน
+-- รันไฟล์นี้ไฟล์เดียว → กด Run
 -- ซ่อน/แสดงหน้าต่าง: ปุ่ม RightControl
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -14,33 +14,36 @@ local Changed = Folder:WaitForChild("WildChanged")
 local player = Players.LocalPlayer
 
 ---------------------------------------------------------------------
--- UI: Terminal
+-- UI: โครงหน้าต่าง
 ---------------------------------------------------------------------
 local Term = {}
 do
-    -- ปิดหน้าต่างเก่า (ถ้ารันซ้ำ)
     if getgenv().WildTermGui then
         pcall(function() getgenv().WildTermGui:Destroy() end)
     end
 
     local C = {
-        bg        = Color3.fromRGB(24, 24, 24),
-        panel     = Color3.fromRGB(31, 31, 31),
-        border    = Color3.fromRGB(43, 43, 43),
-        text      = Color3.fromRGB(204, 204, 204),
-        dim       = Color3.fromRGB(133, 133, 133),
-        faint     = Color3.fromRGB(90, 90, 90),
-        accent    = Color3.fromRGB(0, 122, 204),
-        green     = Color3.fromRGB(35, 209, 139),
-        red       = Color3.fromRGB(241, 76, 76),
-        yellow    = Color3.fromRGB(229, 192, 123),
-        blue      = Color3.fromRGB(59, 142, 234),
-        cyan      = Color3.fromRGB(41, 184, 219),
-        magenta   = Color3.fromRGB(214, 112, 214),
+        bg      = Color3.fromRGB(24, 24, 24),
+        side    = Color3.fromRGB(31, 31, 31),
+        card    = Color3.fromRGB(37, 37, 38),
+        hover   = Color3.fromRGB(42, 45, 46),
+        border  = Color3.fromRGB(48, 48, 48),
+        text    = Color3.fromRGB(230, 230, 230),
+        sub     = Color3.fromRGB(150, 150, 150),
+        faint   = Color3.fromRGB(95, 95, 95),
+        accent  = Color3.fromRGB(0, 120, 212),
+        green   = Color3.fromRGB(35, 209, 139),
+        red     = Color3.fromRGB(241, 76, 76),
+        yellow  = Color3.fromRGB(229, 192, 123),
+        blue    = Color3.fromRGB(59, 142, 234),
+        cyan    = Color3.fromRGB(41, 184, 219),
+        off     = Color3.fromRGB(70, 70, 70),
     }
     Term.C = C
-    local FONT = Enum.Font.Code
-    local MAX_LINES = 250
+    local FONT = Enum.Font.Gotham
+    local FONT_B = Enum.Font.GothamMedium
+    local MONO = Enum.Font.Code
+    Term.FONT, Term.FONT_B, Term.MONO = FONT, FONT_B, MONO
 
     local function new(class, props, parent)
         local o = Instance.new(class)
@@ -48,11 +51,13 @@ do
         if parent then o.Parent = parent end
         return o
     end
-    local function corner(p, r) new("UICorner", { CornerRadius = UDim.new(0, r or 6) }, p) end
-    local function stroke(p, col) new("UIStroke", { Color = col or C.border, Thickness = 1 }, p) end
+    local function corner(p, r) return new("UICorner", { CornerRadius = UDim.new(0, r or 6) }, p) end
+    local function stroke(p, col) return new("UIStroke", { Color = col or C.border, Thickness = 1,
+        ApplyStrokeMode = Enum.ApplyStrokeMode.Border }, p) end
+    Term.new, Term.corner, Term.stroke = new, corner, stroke
 
     local gui = new("ScreenGui", {
-        Name = "WildTerminal", ResetOnSpawn = false, IgnoreGuiInset = true,
+        Name = "WildAutoUI", ResetOnSpawn = false, IgnoreGuiInset = true,
         ZIndexBehavior = Enum.ZIndexBehavior.Sibling, DisplayOrder = 999,
     })
     pcall(function() if syn and syn.protect_gui then syn.protect_gui(gui) end end)
@@ -65,148 +70,110 @@ do
     getgenv().WildTermGui = gui
     Term.Gui = gui
 
-    -- หน้าต่าง
+    local W_W, W_H = 660, 430
     local win = new("Frame", {
-        Name = "Window", Size = UDim2.fromOffset(700, 400),
-        Position = UDim2.new(0.5, -350, 0.5, -200),
+        Name = "Window", Size = UDim2.fromOffset(W_W, W_H),
+        Position = UDim2.new(0.5, -W_W / 2, 0.5, -W_H / 2),
         BackgroundColor3 = C.bg, BorderSizePixel = 0, ClipsDescendants = true,
     }, gui)
-    corner(win, 8)
+    corner(win, 10)
     stroke(win)
+    Term.Window = win
 
-    -- แถบบน (แท็บ + ปุ่ม)
-    local top = new("Frame", {
-        Name = "Top", Size = UDim2.new(1, 0, 0, 32),
-        BackgroundColor3 = C.panel, BorderSizePixel = 0,
-    }, win)
+    -- แถบชื่อ
+    local titleBar = new("Frame", { Size = UDim2.new(1, 0, 0, 36), BackgroundColor3 = C.side, BorderSizePixel = 0 }, win)
     new("Frame", { Size = UDim2.new(1, 0, 0, 1), Position = UDim2.new(0, 0, 1, -1),
-        BackgroundColor3 = C.border, BorderSizePixel = 0 }, top)
-
-    -- ไฟสามดวงแบบ mac
+        BackgroundColor3 = C.border, BorderSizePixel = 0 }, titleBar)
+    local dots = {}
     for i, col in ipairs({ Color3.fromRGB(255, 95, 87), Color3.fromRGB(254, 188, 46), Color3.fromRGB(40, 200, 64) }) do
-        local dot = new("Frame", { Size = UDim2.fromOffset(10, 10), Position = UDim2.fromOffset(10 + (i - 1) * 16, 11),
-            BackgroundColor3 = col, BorderSizePixel = 0 }, top)
-        corner(dot, 5)
+        local d = new("TextButton", { Size = UDim2.fromOffset(12, 12), Position = UDim2.fromOffset(12 + (i - 1) * 20, 12),
+            BackgroundColor3 = col, BorderSizePixel = 0, Text = "", AutoButtonColor = false }, titleBar)
+        corner(d, 6)
+        dots[i] = d
     end
+    new("TextLabel", { Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, Font = FONT_B, TextSize = 13,
+        TextColor3 = C.sub, Text = "Wild Auto" }, titleBar)
+    local headStatus = new("TextLabel", { Size = UDim2.new(0, 200, 1, 0), Position = UDim2.new(1, -212, 0, 0),
+        BackgroundTransparency = 1, Font = FONT, TextSize = 12, TextColor3 = C.sub, RichText = true,
+        TextXAlignment = Enum.TextXAlignment.Right, Text = "" }, titleBar)
+    Term.HeadStatus = headStatus
 
-    local tabsHolder = new("Frame", { Size = UDim2.new(0, 330, 1, 0), Position = UDim2.fromOffset(64, 0),
-        BackgroundTransparency = 1 }, top)
-    new("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 4),
-        SortOrder = Enum.SortOrder.LayoutOrder }, tabsHolder)
+    -- แถบด้านซ้าย
+    local side = new("Frame", { Size = UDim2.new(0, 160, 1, -36), Position = UDim2.fromOffset(0, 36),
+        BackgroundColor3 = C.side, BorderSizePixel = 0 }, win)
+    new("Frame", { Size = UDim2.new(0, 1, 1, 0), Position = UDim2.new(1, -1, 0, 0),
+        BackgroundColor3 = C.border, BorderSizePixel = 0 }, side)
+    local nav = new("Frame", { Size = UDim2.new(1, -16, 1, -16), Position = UDim2.fromOffset(8, 10),
+        BackgroundTransparency = 1 }, side)
+    new("UIListLayout", { Padding = UDim.new(0, 2), SortOrder = Enum.SortOrder.LayoutOrder }, nav)
 
-    local btnHolder = new("Frame", { Size = UDim2.new(0, 290, 1, 0), Position = UDim2.new(1, -296, 0, 0),
-        BackgroundTransparency = 1 }, top)
-    new("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 4),
-        HorizontalAlignment = Enum.HorizontalAlignment.Right, VerticalAlignment = Enum.VerticalAlignment.Center,
-        SortOrder = Enum.SortOrder.LayoutOrder }, btnHolder)
-
-    -- เนื้อหา
-    local body = new("Frame", { Name = "Body", Size = UDim2.new(1, 0, 1, -32 - 22), Position = UDim2.fromOffset(0, 32),
+    -- พื้นที่เนื้อหา
+    local content = new("Frame", { Size = UDim2.new(1, -160, 1, -36), Position = UDim2.fromOffset(160, 36),
         BackgroundTransparency = 1 }, win)
 
-    -- แถบสถานะล่าง
-    local status = new("Frame", { Name = "Status", Size = UDim2.new(1, 0, 0, 22), Position = UDim2.new(0, 0, 1, -22),
-        BackgroundColor3 = C.accent, BorderSizePixel = 0 }, win)
-    local statusText = new("TextLabel", { Size = UDim2.new(1, -16, 1, 0), Position = UDim2.fromOffset(8, 0),
-        BackgroundTransparency = 1, Font = FONT, TextSize = 12, TextColor3 = Color3.new(1, 1, 1),
-        TextXAlignment = Enum.TextXAlignment.Left, RichText = true, Text = "○ IDLE" }, status)
-
-    -- หน้าแต่ละแท็บ
-    local function makePage(name)
-        local sf = new("ScrollingFrame", {
-            Name = name, Size = UDim2.new(1, -12, 1, -8), Position = UDim2.fromOffset(8, 4),
-            BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 6,
-            ScrollBarImageColor3 = C.faint, CanvasSize = UDim2.new(), AutomaticCanvasSize = Enum.AutomaticSize.Y,
-            Visible = false,
-        }, body)
-        new("UIListLayout", { SortOrder = Enum.SortOrder.LayoutOrder, Padding = UDim.new(0, 1) }, sf)
-        return sf
-    end
-
-    local termPage = new("Frame", { Name = "TerminalPage", Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1 }, body)
-    local logs = new("ScrollingFrame", {
-        Name = "Logs", Size = UDim2.new(1, -12, 1, -34), Position = UDim2.fromOffset(8, 4),
-        BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 6,
-        ScrollBarImageColor3 = C.faint, CanvasSize = UDim2.new(), AutomaticCanvasSize = Enum.AutomaticSize.Y,
-    }, termPage)
-    new("UIListLayout", { SortOrder = Enum.SortOrder.LayoutOrder, Padding = UDim.new(0, 1) }, logs)
-
-    -- ช่องพิมพ์คำสั่ง
-    local inputBar = new("Frame", { Size = UDim2.new(1, -16, 0, 26), Position = UDim2.new(0, 8, 1, -28),
-        BackgroundColor3 = C.panel, BorderSizePixel = 0 }, termPage)
-    corner(inputBar, 4)
-    stroke(inputBar)
-    local prompt = new("TextLabel", { Size = UDim2.new(0, 70, 1, 0), Position = UDim2.fromOffset(8, 0),
-        BackgroundTransparency = 1, Font = FONT, TextSize = 13, RichText = true,
-        TextXAlignment = Enum.TextXAlignment.Left, TextColor3 = C.text,
-        Text = '<font color="#23d18b">wild</font> <font color="#3b8eea">~</font> $' }, inputBar)
-    local box = new("TextBox", { Size = UDim2.new(1, -86, 1, 0), Position = UDim2.fromOffset(80, 0),
-        BackgroundTransparency = 1, Font = FONT, TextSize = 13, TextColor3 = C.text,
-        PlaceholderText = "พิมพ์ help", PlaceholderColor3 = C.faint, ClearTextOnFocus = false,
-        TextXAlignment = Enum.TextXAlignment.Left, Text = "" }, inputBar)
-
-    local eggsPage = makePage("EggsPage")
-    local unitsPage = makePage("UnitsPage")
-    local pages = { TERMINAL = termPage, EGGS = eggsPage, UNITS = unitsPage }
+    local pages, navItems = {}, {}
     Term.Pages = pages
+    Term.Current = nil
 
-    -- แท็บ
-    local tabs = {}
-    Term.Current = "TERMINAL"
-    local function selectTab(name)
+    function Term.SelectPage(name)
         Term.Current = name
         for n, p in pairs(pages) do p.Visible = (n == name) end
-        for n, t in pairs(tabs) do
-            t.btn.TextColor3 = (n == name) and C.text or C.dim
-            t.line.Visible = (n == name)
+        for n, it in pairs(navItems) do
+            local on = (n == name)
+            it.btn.BackgroundTransparency = on and 0 or 1
+            it.label.TextColor3 = on and C.text or C.sub
+            it.bar.Visible = on
         end
-        if Term.OnTab then task.spawn(Term.OnTab, name) end
-    end
-    Term.SelectTab = selectTab
-
-    for i, name in ipairs({ "TERMINAL", "EGGS", "UNITS" }) do
-        local b = new("TextButton", { Size = UDim2.new(0, 0, 1, 0), AutomaticSize = Enum.AutomaticSize.X,
-            BackgroundTransparency = 1, Font = FONT, TextSize = 12, Text = "  " .. name .. "  ",
-            TextColor3 = C.dim, LayoutOrder = i, AutoButtonColor = false }, tabsHolder)
-        local line = new("Frame", { Size = UDim2.new(1, 0, 0, 1), Position = UDim2.new(0, 0, 1, -1),
-            BackgroundColor3 = C.text, BorderSizePixel = 0, Visible = false }, b)
-        tabs[name] = { btn = b, line = line }
-        b.MouseButton1Click:Connect(function() selectTab(name) end)
+        if Term.OnPage then task.spawn(Term.OnPage, name) end
     end
 
-    -- ปุ่มขวาบน
-    local function topButton(text, color, order, cb)
-        local b = new("TextButton", { Size = UDim2.new(0, 0, 0, 22), AutomaticSize = Enum.AutomaticSize.X,
-            BackgroundColor3 = C.bg, Font = FONT, TextSize = 12, Text = "  " .. text .. "  ",
-            TextColor3 = color, LayoutOrder = order, AutoButtonColor = true, BorderSizePixel = 0 }, btnHolder)
-        corner(b, 4)
-        stroke(b)
-        b.MouseButton1Click:Connect(cb)
-        return b
-    end
-    Term.Buttons = {}
-    function Term.AddButton(text, color, order, cb)
-        Term.Buttons[text] = topButton(text, color, order, cb)
+    function Term.AddPage(name, title, order)
+        local btn = new("TextButton", { Size = UDim2.new(1, 0, 0, 30), BackgroundColor3 = C.hover,
+            BackgroundTransparency = 1, BorderSizePixel = 0, Text = "", AutoButtonColor = false, LayoutOrder = order }, nav)
+        corner(btn, 5)
+        local bar = new("Frame", { Size = UDim2.new(0, 2, 0, 14), Position = UDim2.new(0, 0, 0.5, -7),
+            BackgroundColor3 = C.accent, BorderSizePixel = 0, Visible = false }, btn)
+        local label = new("TextLabel", { Size = UDim2.new(1, -20, 1, 0), Position = UDim2.fromOffset(12, 0),
+            BackgroundTransparency = 1, Font = FONT, TextSize = 13, TextColor3 = C.sub,
+            TextXAlignment = Enum.TextXAlignment.Left, Text = title }, btn)
+        navItems[name] = { btn = btn, label = label, bar = bar }
+        btn.MouseButton1Click:Connect(function() Term.SelectPage(name) end)
+
+        local page = new("ScrollingFrame", {
+            Name = name, Size = UDim2.new(1, -24, 1, -16), Position = UDim2.fromOffset(12, 8),
+            BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 4,
+            ScrollBarImageColor3 = C.faint, CanvasSize = UDim2.new(), AutomaticCanvasSize = Enum.AutomaticSize.Y,
+            Visible = false,
+        }, content)
+        new("UIListLayout", { Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder }, page)
+        new("UIPadding", { PaddingTop = UDim.new(0, 6), PaddingBottom = UDim.new(0, 12), PaddingRight = UDim.new(0, 6) }, page)
+        pages[name] = page
+        return page
     end
 
-    -- แสดง / ซ่อน / ย่อ
+    -- ซ่อน / ย่อ / ปิด
     local minimized = false
     function Term.Minimize()
         minimized = not minimized
-        body.Visible = not minimized
-        status.Visible = not minimized
-        win.Size = minimized and UDim2.fromOffset(700, 32) or UDim2.fromOffset(700, 400)
+        side.Visible = not minimized
+        content.Visible = not minimized
+        win.Size = minimized and UDim2.fromOffset(W_W, 36) or UDim2.fromOffset(W_W, W_H)
     end
-    UserInputService.InputBegan:Connect(function(input, gp)
-        if input.KeyCode == Enum.KeyCode.RightControl then
+    dots[2].MouseButton1Click:Connect(function() Term.Minimize() end)
+    dots[3].MouseButton1Click:Connect(function() Term.Minimize() end)
+    dots[1].MouseButton1Click:Connect(function()
+        if Term.OnClose then Term.OnClose() end
+    end)
+    local keyConn = UserInputService.InputBegan:Connect(function(input)
+        if input.KeyCode == Enum.KeyCode.RightControl and win.Parent then
             win.Visible = not win.Visible
         end
     end)
 
-    -- ลากหน้าต่าง
+    -- ลาก
     do
         local dragging, startPos, startInput
-        top.InputBegan:Connect(function(input)
+        titleBar.InputBegan:Connect(function(input)
             if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
                 dragging = true
                 startInput = input.Position
@@ -216,23 +183,34 @@ do
                 end)
             end
         end)
-        UserInputService.InputChanged:Connect(function(input)
+        local dragConn = UserInputService.InputChanged:Connect(function(input)
             if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
                 local d = input.Position - startInput
                 win.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)
             end
         end)
+        Term._conns = { keyConn, dragConn }
     end
 
-    -- ข้อความ
+    -- ตัวช่วยข้อความ
     local function esc(s)
         return (tostring(s):gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;"))
     end
     Term.esc = esc
-    local function hex(c)
-        return string.format("#%02x%02x%02x", math.floor(c.R * 255), math.floor(c.G * 255), math.floor(c.B * 255))
+
+    ---------------------------------------------------------------
+    -- หน้า Logs (สร้างไว้ก่อน เพื่อให้ print ใช้ได้ตั้งแต่แรก)
+    ---------------------------------------------------------------
+    local logBox -- ScrollingFrame ใส่ log
+    local MAX_LINES = 200
+    local order, count = 0, 0
+    local pendingLogs = {}
+
+    function Term.AttachLogBox(sf)
+        logBox = sf
+        for _, item in ipairs(pendingLogs) do Term.Print(item[1], item[2], item[3]) end
+        pendingLogs = {}
     end
-    Term.hex = hex
 
     local function autoColor(s)
         local l = s:lower()
@@ -244,32 +222,32 @@ do
             return C.green
         elseif s:find("เป้าหมาย") or s:find("ไปตี") or s:find("เริ่ม") or s:find("เลือก") then
             return C.yellow
-        elseif s:match("^%s*[=%-]+") then
+        elseif s:match("^%s*[=%-]+") or s:find("ตีครั้งที่") or s:find("กำลังเดิน") then
             return C.faint
-        elseif s:find("ตีครั้งที่") or s:find("กำลังเดิน") then
-            return C.dim
         end
         return C.text
     end
 
-    local order = 0
-    local count = 0
     function Term.Print(s, color, raw)
         if not gui.Parent then return end
         s = tostring(s):gsub("^%[Auto%]%s*", "")
+        if not logBox then
+            table.insert(pendingLogs, { s, color, raw })
+            return
+        end
         color = color or autoColor(s)
         order += 1
         count += 1
-        local atBottom = logs.CanvasPosition.Y >= logs.AbsoluteCanvasSize.Y - logs.AbsoluteSize.Y - 30
+        local atBottom = logBox.CanvasPosition.Y >= logBox.AbsoluteCanvasSize.Y - logBox.AbsoluteSize.Y - 30
         new("TextLabel", {
-            Size = UDim2.new(1, -8, 0, 0), AutomaticSize = Enum.AutomaticSize.Y,
-            BackgroundTransparency = 1, Font = FONT, TextSize = 13, RichText = true, TextWrapped = true,
+            Size = UDim2.new(1, -6, 0, 0), AutomaticSize = Enum.AutomaticSize.Y,
+            BackgroundTransparency = 1, Font = MONO, TextSize = 12, RichText = true, TextWrapped = true,
             TextXAlignment = Enum.TextXAlignment.Left, TextColor3 = color, LayoutOrder = order,
-            Text = '<font color="#5a5a5a">' .. os.date("%H:%M:%S") .. '</font>  ' .. (raw and s or esc(s)),
-        }, logs)
+            Text = '<font color="#5f5f5f">' .. os.date("%H:%M:%S") .. '</font>  ' .. (raw and s or esc(s)),
+        }, logBox)
         if count > MAX_LINES then
             local oldest, oldestOrder
-            for _, ch in ipairs(logs:GetChildren()) do
+            for _, ch in ipairs(logBox:GetChildren()) do
                 if ch:IsA("TextLabel") and (not oldestOrder or ch.LayoutOrder < oldestOrder) then
                     oldest, oldestOrder = ch, ch.LayoutOrder
                 end
@@ -281,87 +259,28 @@ do
         end
         if atBottom then
             task.defer(function()
-                logs.CanvasPosition = Vector2.new(0, math.max(0, logs.AbsoluteCanvasSize.Y - logs.AbsoluteSize.Y))
+                logBox.CanvasPosition = Vector2.new(0, math.max(0, logBox.AbsoluteCanvasSize.Y - logBox.AbsoluteSize.Y))
             end)
         end
+        if Term.OnLog then pcall(Term.OnLog, s, color) end
     end
 
     function Term.Clear()
-        for _, ch in ipairs(logs:GetChildren()) do
+        if not logBox then return end
+        for _, ch in ipairs(logBox:GetChildren()) do
             if ch:IsA("TextLabel") then ch:Destroy() end
         end
         count = 0
     end
 
-    -- เขียนหลายบรรทัดลงหน้า EGGS / UNITS (ใช้ label ซ้ำ ไม่กระพริบ)
-    function Term.SetLines(pageName, lines)
-        local page = pages[pageName]
-        if not page then return end
-        local pool = {}
-        for _, ch in ipairs(page:GetChildren()) do
-            if ch:IsA("TextLabel") then pool[ch.LayoutOrder] = ch end
-        end
-        for i, text in ipairs(lines) do
-            local lbl = pool[i]
-            if not lbl then
-                lbl = new("TextLabel", {
-                    Size = UDim2.new(1, -8, 0, 0), AutomaticSize = Enum.AutomaticSize.Y,
-                    BackgroundTransparency = 1, Font = FONT, TextSize = 13, RichText = true,
-                    TextWrapped = false, TextXAlignment = Enum.TextXAlignment.Left,
-                    TextColor3 = C.text, LayoutOrder = i,
-                }, page)
-            end
-            lbl.Text = text
-            pool[i] = nil
-        end
-        for _, lbl in pairs(pool) do lbl:Destroy() end
-    end
-
-    function Term.SetStatus(rich)
-        statusText.Text = rich
-    end
-    function Term.SetStatusColor(col)
-        status.BackgroundColor3 = col
-    end
-
-    -- คำสั่ง
-    local history, hIndex = {}, 0
-    box.FocusLost:Connect(function(enter)
-        if not enter then return end
-        local cmd = box.Text
-        box.Text = ""
-        if cmd:match("^%s*$") then return end
-        table.insert(history, cmd)
-        hIndex = #history + 1
-        Term.Print('<font color="#3b8eea">$</font> ' .. esc(cmd), C.text, true)
-        if Term.OnCommand then
-            local ok, err = pcall(Term.OnCommand, cmd)
-            if not ok then Term.Print("error: " .. tostring(err), C.red) end
-        end
-        task.defer(function() box:CaptureFocus() end)
-    end)
-    UserInputService.InputBegan:Connect(function(input)
-        if not box:IsFocused() or #history == 0 then return end
-        if input.KeyCode == Enum.KeyCode.Up then
-            hIndex = math.max(1, hIndex - 1)
-            box.Text = history[hIndex] or ""
-            box.CursorPosition = #box.Text + 1
-        elseif input.KeyCode == Enum.KeyCode.Down then
-            hIndex = math.min(#history + 1, hIndex + 1)
-            box.Text = history[hIndex] or ""
-            box.CursorPosition = #box.Text + 1
-        end
-    end)
-
     function Term.Destroy()
+        for _, c in ipairs(Term._conns or {}) do pcall(function() c:Disconnect() end) end
         pcall(function() gui:Destroy() end)
         if getgenv().WildTermGui == gui then getgenv().WildTermGui = nil end
     end
-
-    selectTab("TERMINAL")
 end
 
--- ส่ง print ทั้งหมดในสคริปต์นี้ไปที่หน้าต่าง Terminal (และ console ด้วย)
+-- ส่ง print ทั้งหมดในสคริปต์นี้ไปที่หน้า Logs (และ console ด้วย)
 local rawprint = print
 local function print(...)
     local n = select("#", ...)
@@ -1150,11 +1069,226 @@ function W.Start()
 end
 
 
+
 ---------------------------------------------------------------------
--- UI: แท็บ EGGS / UNITS + แถบสถานะ
+-- UI: ส่วนควบคุม (ปุ่มเปิด/ปิด, ตัวเลข, รายการไข่)
 ---------------------------------------------------------------------
 local C = Term.C
-local hex, esc = Term.hex, Term.esc
+local new, corner, stroke, esc = Term.new, Term.corner, Term.stroke, Term.esc
+local FONT, FONT_B, MONO = Term.FONT, Term.FONT_B, Term.MONO
+local TWEEN = TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+
+local refreshers = {} -- ฟังก์ชันอัปเดตค่าบนจอให้ตรงกับ CFG
+
+-- หัวข้อ
+local function section(page, text, order)
+    return new("TextLabel", { Size = UDim2.new(1, 0, 0, 22), BackgroundTransparency = 1, Font = FONT_B,
+        TextSize = 12, TextColor3 = C.sub, TextXAlignment = Enum.TextXAlignment.Left,
+        Text = string.upper(text), LayoutOrder = order }, page)
+end
+
+-- กล่องรวมหลายแถว
+local function group(page, order)
+    local g = new("Frame", { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y,
+        BackgroundColor3 = C.card, BorderSizePixel = 0, LayoutOrder = order }, page)
+    corner(g, 8)
+    stroke(g)
+    new("UIListLayout", { SortOrder = Enum.SortOrder.LayoutOrder }, g)
+    return g
+end
+
+-- แถว: ชื่อ + คำอธิบาย + ตัวควบคุมด้านขวา
+local rowCount = 0
+local function row(parent, title, desc)
+    rowCount += 1
+    local r = new("Frame", { Size = UDim2.new(1, 0, 0, desc and 52 or 40), BackgroundTransparency = 1,
+        LayoutOrder = rowCount }, parent)
+    local n = (parent:GetAttribute("rows") or 0) + 1
+    parent:SetAttribute("rows", n)
+    if n > 1 then
+        new("Frame", { Size = UDim2.new(1, -24, 0, 1), Position = UDim2.fromOffset(12, 0),
+            BackgroundColor3 = C.border, BorderSizePixel = 0 }, r)
+    end
+    new("TextLabel", { Size = UDim2.new(1, -150, 0, 18), Position = UDim2.fromOffset(14, desc and 9 or 11),
+        BackgroundTransparency = 1, Font = FONT, TextSize = 13, TextColor3 = C.text,
+        TextXAlignment = Enum.TextXAlignment.Left, Text = title }, r)
+    if desc then
+        new("TextLabel", { Size = UDim2.new(1, -150, 0, 16), Position = UDim2.fromOffset(14, 28),
+            BackgroundTransparency = 1, Font = FONT, TextSize = 11, TextColor3 = C.sub,
+            TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd, Text = desc }, r)
+    end
+    return r
+end
+
+-- สวิตช์เปิด/ปิด
+local function toggle(parent, title, desc, key, onChange)
+    local r = row(parent, title, desc)
+    local sw = new("TextButton", { Size = UDim2.fromOffset(38, 20), Position = UDim2.new(1, -52, 0.5, -10),
+        BackgroundColor3 = C.off, BorderSizePixel = 0, Text = "", AutoButtonColor = false }, r)
+    corner(sw, 10)
+    local knob = new("Frame", { Size = UDim2.fromOffset(16, 16), Position = UDim2.fromOffset(2, 2),
+        BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0 }, sw)
+    corner(knob, 8)
+
+    local function render(instant)
+        local on = CFG[key] and true or false
+        local pos = on and UDim2.fromOffset(20, 2) or UDim2.fromOffset(2, 2)
+        local col = on and C.accent or C.off
+        if instant then
+            knob.Position, sw.BackgroundColor3 = pos, col
+        else
+            TweenService:Create(knob, TWEEN, { Position = pos }):Play()
+            TweenService:Create(sw, TWEEN, { BackgroundColor3 = col }):Play()
+        end
+    end
+    sw.MouseButton1Click:Connect(function()
+        CFG[key] = not CFG[key]
+        render(false)
+        if onChange then onChange(CFG[key]) end
+    end)
+    render(true)
+    table.insert(refreshers, function() render(true) end)
+    return r
+end
+
+-- ตัวเลข [-] ค่า [+]
+local function stepper(parent, title, desc, key, step, minV, maxV, fmt, nilAt)
+    local r = row(parent, title, desc)
+    local box = new("Frame", { Size = UDim2.fromOffset(112, 26), Position = UDim2.new(1, -126, 0.5, -13),
+        BackgroundColor3 = C.bg, BorderSizePixel = 0 }, r)
+    corner(box, 5)
+    stroke(box)
+    local minus = new("TextButton", { Size = UDim2.fromOffset(28, 26), BackgroundTransparency = 1, Font = FONT_B,
+        TextSize = 15, TextColor3 = C.sub, Text = "-" }, box)
+    local plus = new("TextButton", { Size = UDim2.fromOffset(28, 26), Position = UDim2.new(1, -28, 0, 0),
+        BackgroundTransparency = 1, Font = FONT_B, TextSize = 15, TextColor3 = C.sub, Text = "+" }, box)
+    local val = new("TextLabel", { Size = UDim2.new(1, -56, 1, 0), Position = UDim2.fromOffset(28, 0),
+        BackgroundTransparency = 1, Font = MONO, TextSize = 13, TextColor3 = C.text, Text = "" }, box)
+
+    local function render()
+        local v = CFG[key]
+        if v == nil then
+            val.Text = "off"
+            val.TextColor3 = C.faint
+        else
+            val.Text = fmt and string.format(fmt, v) or tostring(v)
+            val.TextColor3 = C.text
+        end
+    end
+    local function change(dir)
+        local v = CFG[key]
+        if v == nil then
+            v = (dir > 0) and minV or nil
+        else
+            v = math.floor((v + step * dir) / step + 0.5) * step
+            if nilAt and v < minV then v = nil
+            elseif v < minV then v = minV end
+            if v and v > maxV then v = maxV end
+        end
+        CFG[key] = v
+        render()
+    end
+    minus.MouseButton1Click:Connect(function() change(-1) end)
+    plus.MouseButton1Click:Connect(function() change(1) end)
+    render()
+    table.insert(refreshers, render)
+    return r
+end
+
+-- ปุ่ม
+local function button(parent, text, color, size, cb)
+    local b = new("TextButton", { Size = size or UDim2.fromOffset(110, 30), BackgroundColor3 = color,
+        BorderSizePixel = 0, Font = FONT_B, TextSize = 13, TextColor3 = Color3.new(1, 1, 1),
+        Text = text, AutoButtonColor = true }, parent)
+    corner(b, 6)
+    b.MouseButton1Click:Connect(cb)
+    return b
+end
+
+---------------------------------------------------------------------
+-- หน้า Control
+---------------------------------------------------------------------
+local pControl = Term.AddPage("control", "Control", 1)
+local pCombat = Term.AddPage("combat", "Combat", 2)
+local pEggs = Term.AddPage("eggs", "Eggs", 3)
+local pUnits = Term.AddPage("units", "Units", 4)
+local pLogs = Term.AddPage("logs", "Logs", 5)
+
+-- การ์ดสถานะ
+section(pControl, "Status", 1)
+local statusCard = new("Frame", { Size = UDim2.new(1, 0, 0, 118), BackgroundColor3 = C.card,
+    BorderSizePixel = 0, LayoutOrder = 2 }, pControl)
+corner(statusCard, 8)
+stroke(statusCard)
+local stateDot = new("Frame", { Size = UDim2.fromOffset(10, 10), Position = UDim2.fromOffset(16, 20),
+    BackgroundColor3 = C.off, BorderSizePixel = 0 }, statusCard)
+corner(stateDot, 5)
+local stateText = new("TextLabel", { Size = UDim2.new(1, -170, 0, 22), Position = UDim2.fromOffset(34, 14),
+    BackgroundTransparency = 1, Font = FONT_B, TextSize = 16, TextColor3 = C.text,
+    TextXAlignment = Enum.TextXAlignment.Left, Text = "Idle" }, statusCard)
+local stateInfo = new("TextLabel", { Size = UDim2.new(1, -32, 0, 66), Position = UDim2.fromOffset(16, 42),
+    BackgroundTransparency = 1, Font = MONO, TextSize = 12, TextColor3 = C.sub, RichText = true,
+    TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top, Text = "" }, statusCard)
+local runBtn = button(statusCard, "Run", C.accent, UDim2.fromOffset(110, 32), function()
+    if W.active then W.Halt() else W.Start() end
+end)
+runBtn.Position = UDim2.new(1, -126, 0, 12)
+
+-- เริ่มรอบ
+section(pControl, "Round", 3)
+local gRound = group(pControl, 4)
+toggle(gRound, "Auto start", "กด Wild และเลือกตัวละครให้เอง", "AUTO_START")
+stepper(gRound, "Creature", "ใช้ตัวละครลำดับที่ (1 = ตัวดีสุดตามเกม)", "PICK", 1, 1, 30, "#%d")
+toggle(gRound, "Auto restart", "ตาย / หลุดโซน → เริ่มรอบใหม่เอง", "AUTO_RESTART")
+stepper(gRound, "Max restarts", "เริ่มใหม่ได้สูงสุดกี่ครั้ง", "MAX_RESTARTS", 1, 0, 100, "%d")
+stepper(gRound, "Max runtime", "รอบเดียวนานเกินกี่วินาที = ค้าง", "MAX_RUNTIME", 30, 60, 3600, "%ds")
+
+section(pControl, "Safety", 5)
+local gSafe = group(pControl, 6)
+toggle(gSafe, "Learn limit", "ตายที่สัตว์ตัวไหน รอบหน้าเลือกไข่ที่ต่ำกว่า", "LEARN_LIMIT")
+do
+    local r = row(gSafe, "Reset limit", "ล้างค่าที่จำไว้ (ใช้ตอนเปลี่ยนตัวละครที่แข็งขึ้น)")
+    local b = button(r, "Reset", C.off, UDim2.fromOffset(80, 26), function()
+        getgenv().WildAutoFailNum = nil
+        log("ล้างค่า limit แล้ว")
+    end)
+    b.Position = UDim2.new(1, -94, 0.5, -13)
+end
+
+---------------------------------------------------------------------
+-- หน้า Combat
+---------------------------------------------------------------------
+section(pCombat, "Attack", 1)
+local gAtk = group(pCombat, 2)
+toggle(gAtk, "Auto attack", "ตีสัตว์อัตโนมัติ", "AUTO_ATTACK")
+toggle(gAtk, "Kill in order", "ตีไล่ e1, e2, ... จนถึงตัวที่ผูกกับไข่", "KILL_IN_ORDER")
+stepper(gAtk, "Attack delay", "วินาทีระหว่างการตีแต่ละครั้ง", "ATTACK_DELAY", 0.05, 0.05, 2, "%.2fs")
+stepper(gAtk, "Attack range", "เข้าใกล้แค่ไหนถึงเริ่มตี (studs)", "ATTACK_RANGE", 1, 3, 60, "%d")
+stepper(gAtk, "Stuck range", "เดินชนตัวสัตว์แต่อยู่ในระยะนี้ → ตีเลย", "STUCK_RANGE", 5, 10, 150, "%d")
+
+section(pCombat, "Movement", 3)
+local gMove = group(pCombat, 4)
+toggle(gMove, "Teleport", "วาร์ปไปหาเป้าหมาย (เร็ว แต่เสี่ยงโดนตรวจจับ)", "TELEPORT")
+
+section(pCombat, "Debug", 5)
+local gDbg = group(pCombat, 6)
+toggle(gDbg, "Attack log", "แสดงผลการตีและระยะในหน้า Logs", "DEBUG_ATTACK")
+
+---------------------------------------------------------------------
+-- หน้า Eggs
+---------------------------------------------------------------------
+section(pEggs, "Claim", 1)
+local gClaim = group(pEggs, 2)
+toggle(gClaim, "Auto claim", "เก็บไข่เป้าหมายอัตโนมัติ", "AUTO_CLAIM")
+toggle(gClaim, "Return after claim", "ค่า returning ตอนเก็บไข่ (เกมใช้ค่าเปิด)", "RETURN_AFTER")
+stepper(gClaim, "Max egg tier", "ไม่ไปเอาไข่ที่ tier สูงกว่านี้ (off = ไม่จำกัด)", "MAX_EGG_TIER", 1, 1, 30, "%d", true)
+
+section(pEggs, "Eggs in zone  ·  กดเพื่อเลือกเป้าหมาย", 3)
+local eggList_ = new("Frame", { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y,
+    BackgroundColor3 = C.card, BorderSizePixel = 0, LayoutOrder = 4 }, pEggs)
+corner(eggList_, 8)
+stroke(eggList_)
+new("UIListLayout", { SortOrder = Enum.SortOrder.LayoutOrder }, eggList_)
 
 local KIND_COLOR = {
     common = "#9d9d9d", rare = "#3b8eea", epic = "#d670d6",
@@ -1162,57 +1296,97 @@ local KIND_COLOR = {
 }
 local SHINY_COLOR = { golden = "#e5c07b", diamond = "#29b8db" }
 
+local eggRows = {}
+local function eggRow(i)
+    if eggRows[i] then return eggRows[i] end
+    local b = new("TextButton", { Size = UDim2.new(1, 0, 0, 34), BackgroundColor3 = C.hover,
+        BackgroundTransparency = 1, BorderSizePixel = 0, Text = "", AutoButtonColor = false, LayoutOrder = i }, eggList_)
+    local lbl = new("TextLabel", { Size = UDim2.new(1, -28, 1, 0), Position = UDim2.fromOffset(14, 0),
+        BackgroundTransparency = 1, Font = MONO, TextSize = 12, RichText = true, TextColor3 = C.text,
+        TextXAlignment = Enum.TextXAlignment.Left, Text = "" }, b)
+    b.MouseEnter:Connect(function() b.BackgroundTransparency = 0.4 end)
+    b.MouseLeave:Connect(function() b.BackgroundTransparency = 1 end)
+    eggRows[i] = { btn = b, lbl = lbl, slot = nil }
+    b.MouseButton1Click:Connect(function()
+        local slot = eggRows[i].slot
+        if slot == "__auto" then
+            CFG.TARGET_EGG = nil
+            log("เป้าหมายไข่: เลือกดีสุดอัตโนมัติ")
+        elseif slot then
+            CFG.TARGET_EGG = (CFG.TARGET_EGG == slot) and nil or slot
+            log("เป้าหมายไข่: " .. tostring(CFG.TARGET_EGG or "อัตโนมัติ") .. " (มีผลรอบถัดไป)")
+        end
+    end)
+    return eggRows[i]
+end
+
 local function pad(s, n)
     s = tostring(s)
-    if #s >= n then return s end
-    return s .. string.rep(" ", n - #s)
+    return #s >= n and s or (s .. string.rep(" ", n - #s))
 end
 
 local function renderEggs()
     local list = eggList()
-    local lines = {}
-    table.insert(lines, '<font color="#858585">' .. esc(string.format("%-7s %-5s %-10s %-8s %-4s %-6s %-6s %s",
-        "EGG", "TIER", "KIND", "SHINY", "STAR", "ENEMY", "DIST", "")) .. '</font>')
-    if #list == 0 then
-        table.insert(lines, '<font color="#5a5a5a">ยังไม่มีข้อมูลไข่ — เข้าโซน Wild ก่อน</font>')
-    end
     local failNum = getgenv().WildAutoFailNum
-    for _, e in ipairs(list) do
-        local kc = KIND_COLOR[tostring(e.kind)] or "#cccccc"
-        local sc = e.shiny and (SHINY_COLOR[tostring(e.shiny)] or "#e5c07b") or "#5a5a5a"
-        local isTarget = W.curEgg and W.curEgg.slot == e.slot
-        local tooHard = failNum and enemyNum(e.enemyId) >= failNum
-        local mark = ""
-        if isTarget then
-            mark = '<font color="#23d18b">&lt;&lt; target</font>'
-        elseif W.Dead[e.enemyId] then
-            mark = '<font color="#5a5a5a">enemy dead</font>'
-        elseif tooHard then
-            mark = '<font color="#f14c4c">too hard</font>'
-        end
-        local dist = distTo(e.position)
-        table.insert(lines, string.format(
-            '<font color="#cccccc">%s</font> <font color="#858585">%s</font> <font color="%s">%s</font> <font color="%s">%s</font> <font color="#e5c07b">%s</font> <font color="#29b8db">%s</font> <font color="#858585">%s</font> %s',
-            esc(pad(e.slot, 7)), esc(pad(e.tier, 5)), kc, esc(pad(e.kind, 10)),
-            sc, esc(pad(e.shiny or "-", 8)), esc(pad(e.hatchStars, 4)), esc(pad(e.enemyId, 6)),
-            esc(pad(dist == math.huge and "-" or string.format("%.0f", dist), 6)), mark))
+    local i = 1
+    local auto = eggRow(i)
+    auto.slot = "__auto"
+    auto.lbl.Text = (CFG.TARGET_EGG == nil and '<font color="#0078d4">●</font> ' or '<font color="#5f5f5f">○</font> ')
+        .. '<font color="#e6e6e6">Auto</font>  <font color="#969696">เลือกไข่ดาวมากสุดเอง</font>'
+    auto.btn.Visible = true
+    if #list == 0 then
+        i += 1
+        local r = eggRow(i)
+        r.slot = nil
+        r.lbl.Text = '<font color="#5f5f5f">ยังไม่มีข้อมูลไข่ — เข้าโซน Wild ก่อน</font>'
+        r.btn.Visible = true
     end
-    Term.SetLines("EGGS", lines)
+    for _, e in ipairs(list) do
+        i += 1
+        local r = eggRow(i)
+        r.slot = e.slot
+        r.btn.Visible = true
+        local picked = CFG.TARGET_EGG == e.slot
+        local current = W.curEgg and W.curEgg.slot == e.slot
+        local kc = KIND_COLOR[tostring(e.kind)] or "#cccccc"
+        local sc = e.shiny and (SHINY_COLOR[tostring(e.shiny)] or "#e5c07b") or "#5f5f5f"
+        local tag = ""
+        if current then tag = '<font color="#23d18b">กำลังไปเอา</font>'
+        elseif W.Dead[e.enemyId] then tag = '<font color="#5f5f5f">สัตว์ตายแล้ว</font>'
+        elseif failNum and enemyNum(e.enemyId) >= failNum then tag = '<font color="#f14c4c">ยากเกิน</font>' end
+        r.lbl.Text = string.format(
+            '%s <font color="#e6e6e6">%s</font> <font color="#969696">T%s</font> <font color="%s">%s</font> <font color="%s">%s</font> <font color="#e5c07b">%s*</font> <font color="#29b8db">%s</font> %s',
+            picked and '<font color="#0078d4">●</font>' or '<font color="#5f5f5f">○</font>',
+            esc(pad(e.slot, 6)), esc(pad(e.tier, 3)), kc, esc(pad(e.kind, 10)),
+            sc, esc(pad(e.shiny or "-", 8)), esc(pad(e.hatchStars, 3)), esc(pad(e.enemyId, 5)), tag)
+    end
+    for j = i + 1, #eggRows do
+        eggRows[j].btn.Visible = false
+        eggRows[j].slot = nil
+    end
 end
+
+---------------------------------------------------------------------
+-- หน้า Units
+---------------------------------------------------------------------
+section(pUnits, "Enemies in zone", 1)
+local unitBox = new("Frame", { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y,
+    BackgroundColor3 = C.card, BorderSizePixel = 0, LayoutOrder = 2 }, pUnits)
+corner(unitBox, 8)
+stroke(unitBox)
+new("UIListLayout", { SortOrder = Enum.SortOrder.LayoutOrder }, unitBox)
+new("UIPadding", { PaddingTop = UDim.new(0, 6), PaddingBottom = UDim.new(0, 6), PaddingLeft = UDim.new(0, 14) }, unitBox)
+local unitLabels = {}
 
 local function renderUnits()
     local list = {}
     for id, u in pairs(W.Units) do
-        if isAlive(id) then
-            table.insert(list, { id = id, u = u, d = distTo(u.position) })
-        end
+        if isAlive(id) then table.insert(list, { id = id, u = u, d = distTo(u.position) }) end
     end
     table.sort(list, function(a, b) return enemyNum(a.id) < enemyNum(b.id) end)
     local lines = {}
-    table.insert(lines, '<font color="#858585">' .. esc(string.format("%-5s %-15s %-12s %-5s %-18s %s",
-        "ID", "NAME", "LEVEL", "TIER", "HP", "DIST")) .. '</font>')
     if #list == 0 then
-        table.insert(lines, '<font color="#5a5a5a">ยังไม่มีข้อมูลสัตว์ — เข้าโซน Wild ก่อน</font>')
+        table.insert(lines, '<font color="#5f5f5f">ยังไม่มีข้อมูลสัตว์ — เข้าโซน Wild ก่อน</font>')
     end
     for _, it in ipairs(list) do
         local u = it.u
@@ -1221,151 +1395,103 @@ local function renderUnits()
         local hpCol = pct > 0.6 and "#23d18b" or (pct > 0.3 and "#e5c07b" or "#f14c4c")
         local isCur = W.curTarget == it.id
         table.insert(lines, string.format(
-            '<font color="%s">%s</font> <font color="#cccccc">%s</font> <font color="#858585">%s</font> <font color="#858585">%s</font> <font color="%s">%s</font> <font color="#858585">%s</font>%s',
+            '<font color="%s">%s</font> <font color="#e6e6e6">%s</font> <font color="#969696">%s</font> <font color="%s">%s</font> <font color="#5f5f5f">%s</font>%s',
             isCur and "#23d18b" or "#3b8eea", esc(pad(it.id, 5)),
             esc(pad(u.entry and u.entry.name or "?", 15)),
             esc(pad("Lv." .. tostring(u.entry and u.entry.level or "?"), 12)),
-            esc(pad(u.tier or "?", 5)), hpCol, esc(pad(hp .. "/" .. maxHp, 18)),
+            hpCol, esc(pad(hp .. "/" .. maxHp, 16)),
             it.d == math.huge and "-" or string.format("%.0f", it.d),
-            isCur and '  <font color="#23d18b">&lt;&lt; attacking</font>' or ""))
+            isCur and '  <font color="#23d18b">กำลังตี</font>' or ""))
     end
-    Term.SetLines("UNITS", lines)
+    for i, text in ipairs(lines) do
+        local l = unitLabels[i]
+        if not l then
+            l = new("TextLabel", { Size = UDim2.new(1, -14, 0, 20), BackgroundTransparency = 1, Font = MONO,
+                TextSize = 12, RichText = true, TextColor3 = C.text, TextXAlignment = Enum.TextXAlignment.Left,
+                LayoutOrder = i }, unitBox)
+            unitLabels[i] = l
+        end
+        l.Text = text
+        l.Visible = true
+    end
+    for j = #lines + 1, #unitLabels do unitLabels[j].Visible = false end
 end
 
-Term.OnTab = function(name)
-    if name == "EGGS" then renderEggs() elseif name == "UNITS" then renderUnits() end
+---------------------------------------------------------------------
+-- หน้า Logs
+---------------------------------------------------------------------
+do
+    local bar = new("Frame", { Size = UDim2.new(1, 0, 0, 30), BackgroundTransparency = 1, LayoutOrder = 1 }, pLogs)
+    new("TextLabel", { Size = UDim2.new(1, -100, 1, 0), BackgroundTransparency = 1, Font = FONT_B, TextSize = 12,
+        TextColor3 = C.sub, TextXAlignment = Enum.TextXAlignment.Left, Text = "LOGS" }, bar)
+    local clr = button(bar, "Clear", C.off, UDim2.fromOffset(80, 26), function() Term.Clear() end)
+    clr.Position = UDim2.new(1, -80, 0, 2)
+
+    local holder = new("Frame", { Size = UDim2.new(1, 0, 0, 300), BackgroundColor3 = C.card,
+        BorderSizePixel = 0, LayoutOrder = 2 }, pLogs)
+    corner(holder, 8)
+    stroke(holder)
+    local box = new("ScrollingFrame", { Size = UDim2.new(1, -16, 1, -12), Position = UDim2.fromOffset(10, 6),
+        BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 4, ScrollBarImageColor3 = C.faint,
+        CanvasSize = UDim2.new(), AutomaticCanvasSize = Enum.AutomaticSize.Y }, holder)
+    new("UIListLayout", { SortOrder = Enum.SortOrder.LayoutOrder, Padding = UDim.new(0, 1) }, box)
+    Term.AttachLogBox(box)
 end
 
+-- log ล่าสุดโชว์ในการ์ดสถานะด้วย
+local lastLog = ""
+Term.OnLog = function(s) lastLog = s end
+
+---------------------------------------------------------------------
+-- อัปเดตจอทุก 0.5 วิ
+---------------------------------------------------------------------
 local function updateStatus()
-    local parts = {}
     if W.active then
-        table.insert(parts, "● RUNNING")
-        Term.SetStatusColor(C.accent)
+        stateText.Text = "Running"
+        stateDot.BackgroundColor3 = C.green
+        runBtn.Text = "Stop"
+        runBtn.BackgroundColor3 = C.red
+        Term.HeadStatus.Text = '<font color="#23d18b">●</font> running'
     else
-        table.insert(parts, "○ IDLE")
-        Term.SetStatusColor(Color3.fromRGB(60, 60, 60))
+        stateText.Text = "Idle"
+        stateDot.BackgroundColor3 = C.off
+        runBtn.Text = "Run"
+        runBtn.BackgroundColor3 = C.accent
+        Term.HeadStatus.Text = '<font color="#5f5f5f">●</font> idle'
     end
-    table.insert(parts, "round " .. tostring((W.restarts or 0) + (W.active and 1 or 0)) .. "/" .. tostring(CFG.MAX_RESTARTS + 1))
-    if W.curEgg then
-        table.insert(parts, "target " .. tostring(W.curEgg.slot) .. " (" .. tostring(W.curEgg.enemyId) .. ")")
-    end
-    if W.curTarget then table.insert(parts, "hitting " .. tostring(W.curTarget)) end
-    table.insert(parts, "id " .. (W.runId and "OK" or "--"))
-    table.insert(parts, "atk " .. tostring(W.attackCount or 0))
-    if getgenv().WildAutoFailNum then
-        table.insert(parts, "limit &lt; e" .. tostring(getgenv().WildAutoFailNum))
-    end
-    Term.SetStatus(table.concat(parts, "   |   "))
+    local egg = W.curEgg
+    local eggTxt = egg and string.format("%s  %s%s  %s*  (%s)", egg.slot, tostring(egg.kind),
+        egg.shiny and (" " .. tostring(egg.shiny)) or "", tostring(egg.hatchStars), tostring(egg.enemyId)) or "-"
+    local u = W.curTarget and W.Units[W.curTarget]
+    local hitTxt = W.curTarget and string.format("%s  HP %s", W.curTarget,
+        u and tostring(math.floor(u.health or 0)) or "?") or "-"
+    stateInfo.Text = string.format(
+        'target  <font color="#e6e6e6">%s</font>\nhitting <font color="#e6e6e6">%s</font>\nround %s/%s   id %s   atk %s%s\n<font color="#5f5f5f">%s</font>',
+        esc(eggTxt), esc(hitTxt),
+        tostring((W.restarts or 0) + (W.active and 1 or 0)), tostring(CFG.MAX_RESTARTS + 1),
+        W.runId and '<font color="#23d18b">ok</font>' or '<font color="#5f5f5f">--</font>',
+        tostring(W.attackCount or 0),
+        getgenv().WildAutoFailNum and ("   limit &lt; e" .. getgenv().WildAutoFailNum) or "",
+        esc(lastLog:sub(1, 70)))
 end
 
 task.spawn(function()
+    local tick = 0
     while Term.Gui and Term.Gui.Parent and W.running do
         pcall(updateStatus)
-        if Term.Current == "EGGS" then pcall(renderEggs)
-        elseif Term.Current == "UNITS" then pcall(renderUnits) end
-        task.wait(1)
+        tick += 1
+        if tick % 2 == 0 then
+            if Term.Current == "eggs" then pcall(renderEggs)
+            elseif Term.Current == "units" then pcall(renderUnits) end
+        end
+        task.wait(0.5)
     end
 end)
 
----------------------------------------------------------------------
--- คำสั่ง
----------------------------------------------------------------------
-local function parseValue(v)
-    if v == nil or v == "nil" then return nil end
-    if v == "true" then return true end
-    if v == "false" then return false end
-    return tonumber(v) or v
+Term.OnPage = function(name)
+    if name == "eggs" then renderEggs() elseif name == "units" then renderUnits() end
 end
+Term.OnClose = function() W.Stop() end
 
-local HELP = {
-    { "start",            "เริ่มทำงาน (กด Wild → ตี → เก็บไข่)" },
-    { "stop",             "หยุดทำงาน" },
-    { "eggs / units",     "เปิดแท็บไข่ / สัตว์" },
-    { "target <egg|auto>","บังคับเลือกไข่ เช่น target egg4" },
-    { "pick <n>",         "เลือก Creature ลำดับที่ n" },
-    { "maxtier <n|nil>",  "จำกัด tier ไข่สูงสุด" },
-    { "tp on/off",        "วาร์ป / เดิน" },
-    { "resetfail",        "ล้างค่าที่จำว่าสู้ตัวไหนไม่ไหว" },
-    { "set <KEY> <val>",  "แก้ค่าตั้งค่า เช่น set ATTACK_DELAY 0.3" },
-    { "config",           "ดูค่าตั้งค่าทั้งหมด" },
-    { "clear",            "ล้างหน้าจอ" },
-    { "close",            "ปิดทุกอย่าง" },
-}
-
-local function printHelp()
-    Term.Print("คำสั่งที่ใช้ได้:", C.cyan)
-    for _, h in ipairs(HELP) do
-        Term.Print('  <font color="#23d18b">' .. esc(pad(h[1], 18)) .. '</font> <font color="#858585">' .. esc(h[2]) .. '</font>', C.text, true)
-    end
-end
-
-Term.OnCommand = function(line)
-    local args = {}
-    for w in line:gmatch("%S+") do table.insert(args, w) end
-    local cmd = (args[1] or ""):lower()
-
-    if cmd == "help" or cmd == "?" then
-        printHelp()
-    elseif cmd == "start" or cmd == "run" then
-        W.Start()
-    elseif cmd == "stop" then
-        W.Halt()
-    elseif cmd == "eggs" then
-        Term.SelectTab("EGGS")
-    elseif cmd == "units" then
-        Term.SelectTab("UNITS")
-    elseif cmd == "clear" or cmd == "cls" then
-        Term.Clear()
-    elseif cmd == "target" then
-        local v = args[2]
-        CFG.TARGET_EGG = (v == nil or v == "auto" or v == "nil") and nil or v
-        Term.Print("TARGET_EGG = " .. tostring(CFG.TARGET_EGG), C.green)
-    elseif cmd == "pick" then
-        CFG.PICK = tonumber(args[2]) or 1
-        Term.Print("PICK = Creature" .. CFG.PICK, C.green)
-    elseif cmd == "maxtier" then
-        CFG.MAX_EGG_TIER = tonumber(args[2])
-        Term.Print("MAX_EGG_TIER = " .. tostring(CFG.MAX_EGG_TIER), C.green)
-    elseif cmd == "tp" then
-        CFG.TELEPORT = (args[2] == "on" or args[2] == "true")
-        Term.Print("TELEPORT = " .. tostring(CFG.TELEPORT), C.green)
-    elseif cmd == "resetfail" then
-        getgenv().WildAutoFailNum = nil
-        Term.Print("ล้างค่าที่จำไว้แล้ว", C.green)
-    elseif cmd == "set" then
-        local key = args[2] and args[2]:upper()
-        if not key or CFG[key] == nil and not ({ MAX_EGG_TIER = 1, TARGET_EGG = 1 })[key] then
-            Term.Print("ไม่มีค่า " .. tostring(args[2]) .. " — พิมพ์ config เพื่อดูชื่อ", C.red)
-            return
-        end
-        CFG[key] = parseValue(args[3])
-        Term.Print(key .. " = " .. tostring(CFG[key]), C.green)
-    elseif cmd == "config" then
-        local keys = {}
-        for k in pairs(CFG) do table.insert(keys, k) end
-        table.insert(keys, "MAX_EGG_TIER")
-        table.insert(keys, "TARGET_EGG")
-        table.sort(keys)
-        local seen = {}
-        for _, k in ipairs(keys) do
-            if not seen[k] then
-                seen[k] = true
-                Term.Print('  <font color="#3b8eea">' .. esc(pad(k, 16)) .. '</font> ' .. esc(tostring(CFG[k])), C.text, true)
-            end
-        end
-    elseif cmd == "close" or cmd == "exit" then
-        W.Stop()
-    else
-        Term.Print("ไม่รู้จักคำสั่ง: " .. cmd .. " — พิมพ์ help", C.red)
-    end
-end
-
--- ปุ่มขวาบน
-Term.AddButton("Run", C.green, 1, function() W.Start() end)
-Term.AddButton("Stop", C.red, 2, function() W.Halt() end)
-Term.AddButton("Clear", C.dim, 3, function() Term.Clear() end)
-Term.AddButton("_", C.dim, 4, function() Term.Minimize() end)
-Term.AddButton("X", C.dim, 5, function() W.Stop() end)
-
-Term.Print("Wild Terminal พร้อมแล้ว", C.green)
-Term.Print("กด Run หรือพิมพ์ start เพื่อเริ่ม  •  help ดูคำสั่ง  •  RightControl ซ่อน/แสดง", C.dim)
+Term.SelectPage("control")
+log("พร้อมแล้ว — กด Run เพื่อเริ่ม  (RightControl = ซ่อน/แสดง)")
