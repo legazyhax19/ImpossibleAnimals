@@ -1,1 +1,138 @@
+-- Animal Scan v2: หารายชื่อสัตว์ทั้งหมด (82 ตัว) ที่เกมเก็บไว้ในเครื่องเรา
+-- รันครั้งเดียวตอนอยู่ฐาน (ถ้าเคยเปิดหน้าฟิวชันมาก่อนจะเจอง่ายขึ้น) แล้วแคป console ส่งมา
+-- อ่านอย่างเดียว ไม่ส่งคำสั่งอะไรไปที่ server
+-- ถ้าเจอ จะบันทึกรายชื่อลงไฟล์ animals.txt ด้วย (ถ้า executor มี writefile)
 
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+-- เขียนทุกอย่างลงไฟล์ (console แสดงแค่สรุป)
+local LOG_FILE = "animal_scan_log.txt"
+local lines = {}
+local function out(s)
+    table.insert(lines, tostring(s))
+end
+local function shallow(v)
+    if type(v) ~= "table" then return type(v) == "string" and string.format("%q", v) or tostring(v) end
+    local p = {}
+    for k, val in pairs(v) do
+        local sv = type(val) == "table" and "{...}" or (type(val) == "string" and string.format("%q", val) or tostring(val))
+        table.insert(p, tostring(k) .. "=" .. sv)
+    end
+    table.sort(p)
+    return "{ " .. table.concat(p, ", ") .. " }"
+end
+
+-- id ที่รู้แน่ว่ามี (จากหน้าฟิวชัน) ใช้เป็นตัวจับ
+local KNOWN = {
+    "cheeseburger", "solar-eclipse", "axolotl", "panther", "zebra", "dragon",
+    "fox", "crocodile", "cheetah", "gorilla", "wasp", "eagle", "jerboa", "electricity",
+}
+local KNOWN_SET = {}
+for _, k in ipairs(KNOWN) do KNOWN_SET[k] = true end
+
+-- นับว่า table นี้มีชื่อสัตว์อยู่กี่ตัว (ดู 3 แบบ: เป็น key / เป็นค่า / เป็นช่อง id ใน table ย่อย)
+local function score(t)
+    local byKey, byValue, byField = 0, 0, 0
+    local n = 0
+    for k, v in pairs(t) do
+        n += 1
+        if n > 400 then break end
+        if type(k) == "string" and KNOWN_SET[k] then byKey += 1 end
+        if type(v) == "string" and KNOWN_SET[v] then byValue += 1 end
+        if type(v) == "table" then
+            local id = rawget(v, "id") or rawget(v, "animalId") or rawget(v, "AnimalId") or rawget(v, "key")
+            if type(id) == "string" and KNOWN_SET[id] then byField += 1 end
+        end
+    end
+    return math.max(byKey, byValue, byField), byKey, byValue, byField, n
+end
+
+-- ดึงรายชื่อทั้งหมดออกมาจาก table ตามแบบที่เจอ
+local function extract(t, mode)
+    local out = {}
+    for k, v in pairs(t) do
+        local id
+        if mode == "key" and type(k) == "string" then id = k
+        elseif mode == "value" and type(v) == "string" then id = v
+        elseif mode == "field" and type(v) == "table" then
+            id = rawget(v, "id") or rawget(v, "animalId") or rawget(v, "AnimalId") or rawget(v, "key")
+        end
+        if type(id) == "string" and id:match("^[%l%-%s]+$") then table.insert(out, id) end
+    end
+    table.sort(out)
+    return out
+end
+
+local candidates = {}
+local function consider(t, where)
+    local ok, best, bk, bv, bf, n = pcall(score, t)
+    if ok and best >= 5 then
+        local mode = (bk == best and "key") or (bv == best and "value") or "field"
+        table.insert(candidates, { t = t, where = where, best = best, mode = mode, n = n })
+    end
+end
+
+-- 1) ModuleScript ใน ReplicatedStorage
+out("========== ค้นใน ModuleScript ==========")
+for _, m in ipairs(ReplicatedStorage:GetDescendants()) do
+    if m:IsA("ModuleScript") then
+        local ok, res = pcall(require, m)
+        if ok and type(res) == "table" then
+            consider(res, "Module " .. m:GetFullName())
+            for k, v in pairs(res) do
+                if type(v) == "table" then consider(v, "Module " .. m:GetFullName() .. "." .. tostring(k)) end
+            end
+        end
+    end
+end
+
+-- 2) ทุก table ในหน่วยความจำ
+out("========== ค้นในหน่วยความจำ ==========")
+if getgc then
+    for _, t in ipairs(getgc(true)) do
+        if type(t) == "table" then consider(t, "memory") end
+    end
+else
+    out("  executor ไม่มี getgc — ข้าม")
+end
+
+-- เรียง: จับชื่อที่รู้จักได้มากสุด และจำนวนใกล้ 82
+table.sort(candidates, function(a, b)
+    if a.best ~= b.best then return a.best > b.best end
+    return math.abs(a.n - 82) < math.abs(b.n - 82)
+end)
+
+out("========== ผล (" .. #candidates .. " ที่) ==========")
+for i, c in ipairs(candidates) do
+    if i > 8 then break end
+    out(string.format("  #%d  %s  แบบ=%s  จำนวน=%d  จับชื่อที่รู้จักได้ %d/%d", i, c.where, c.mode, c.n, c.best, #KNOWN))
+end
+
+if #candidates == 0 then
+    out("ไม่เจอ — ลองเปิดหน้าฟิวชันในเกมก่อน แล้วรันใหม่")
+end
+
+-- เขียนรายละเอียดของ 5 อันดับแรกแบบเต็ม
+for i, c in ipairs(candidates) do
+    if i > 5 then break end
+    local ids = extract(c.t, c.mode)
+    out("")
+    out(string.format("################ อันดับ %d : %s (แบบ=%s, %d ตัว) ################", i, c.where, c.mode, #ids))
+    out("รายชื่อ: " .. table.concat(ids, ", "))
+    out("--- ข้อมูลแต่ละตัว ---")
+    for k, v in pairs(c.t) do
+        out("  " .. tostring(k) .. " = " .. shallow(v))
+    end
+    if i == 1 then getgenv().AnimalList = ids end
+end
+
+local text = table.concat(lines, "\n")
+if writefile then
+    local ok = pcall(writefile, LOG_FILE, text)
+    print(ok and ("[AnimalScan] บันทึกลง " .. LOG_FILE .. " แล้ว (" .. #lines .. " บรรทัด)") or "[AnimalScan] เขียนไฟล์ไม่ได้")
+else
+    print("[AnimalScan] executor ไม่มี writefile — พิมพ์ลง console แทน")
+    for _, l in ipairs(lines) do print(l) end
+end
+print(string.format("[AnimalScan] เจอ %d ที่ · อันดับ 1 มี %d ตัว", #candidates,
+    getgenv().AnimalList and #getgenv().AnimalList or 0))
